@@ -17,7 +17,7 @@
   canvas{display:block}
   /* ---- vignette ---- */
   #vignette{position:fixed;inset:0;pointer-events:none;z-index:5;
-    background:radial-gradient(ellipse at center, transparent 55%, rgba(4,6,18,.38) 100%)}
+    background:radial-gradient(ellipse at center, transparent 52%, rgba(10,8,30,.34) 100%)}
   /* ---- HUD ---- */
   #hud{position:fixed;inset:0;pointer-events:none;z-index:10;opacity:0;transition:opacity 1.2s}
   #hud.on{opacity:1}
@@ -187,7 +187,7 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.22;
+renderer.toneMappingExposure = 0.88;   /* visual overhaul: was 1.22 — the scene blew out to white */
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.useLegacyLights = false;
 document.getElementById('app').appendChild(renderer.domElement);
@@ -196,7 +196,7 @@ const scene = new THREE.Scene();
 /* playtest fix (fog wash): every fog near/far the zone system asks for is
    pushed out by this factor, so distant platforms stay readable */
 const FOG_PUSH = 1.10;
-scene.fog = new THREE.Fog(0xf6cf9a, 90 * FOG_PUSH, 780 * FOG_PUSH);
+scene.fog = new THREE.Fog(0xb1956f, 90 * FOG_PUSH, 780 * FOG_PUSH);
 const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 2400);
 
 /* ---------- environment lighting: soft IBL reflections (kills flatness) ---------- */
@@ -213,7 +213,7 @@ try {
   composer = new EffectComposer(renderer, rt);
   composer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   composer.addPass(new RenderPass(scene, camera));
-  bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.48, 0.6, 0.80);
+  bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.55, 0.82);
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
 } catch (e) { composer = null; }
@@ -264,9 +264,9 @@ sun.shadow.camera.top = 34; sun.shadow.camera.bottom = -34;
 sun.shadow.camera.near = 1; sun.shadow.camera.far = 220;
 sun.shadow.bias = -0.0006;
 scene.add(sun); scene.add(sun.target);
-const hemi = new THREE.HemisphereLight(0xbfe0ff, 0x51406a, 0.95);
+const hemi = new THREE.HemisphereLight(0xbfe0ff, 0x51406a, 0.52);
 scene.add(hemi);
-const amb = new THREE.AmbientLight(0x8899cc, 0.25); scene.add(amb);
+const amb = new THREE.AmbientLight(0x8899cc, 0.15); scene.add(amb);
 
 /* ---------- procedural textures ---------- */
 function glowTexture(inner = 'rgba(255,255,255,1)', outer = 'rgba(255,255,255,0)') {
@@ -298,6 +298,59 @@ function planktonTexture() {
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
+/* visual overhaul: grain textures so platforms stop reading as flat candy.
+   Both maps are near-neutral luminance, so each zone's material color still
+   tints them; the same canvas doubles as a roughnessMap for broken-up light. */
+function stoneTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#c6c9d1'; g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 26; i++) {                       // broad tonal patches
+    g.fillStyle = `rgba(${118 + Math.random() * 30},${122 + Math.random() * 30},${134 + Math.random() * 30},${0.10 + Math.random() * 0.12})`;
+    g.beginPath(); g.arc(Math.random() * 256, Math.random() * 256, 18 + Math.random() * 52, 0, 7); g.fill();
+  }
+  for (let i = 0; i < 5200; i++) {                      // fine grain speckle
+    const v = Math.random();
+    g.fillStyle = v < 0.5 ? `rgba(84,88,102,${0.10 + Math.random() * 0.22})` : `rgba(238,240,246,${0.10 + Math.random() * 0.20})`;
+    g.fillRect(Math.random() * 256, Math.random() * 256, 1 + Math.random() * 2.2, 1 + Math.random() * 2.2);
+  }
+  g.strokeStyle = 'rgba(70,74,88,0.35)'; g.lineWidth = 1;   // hairline cracks
+  for (let i = 0; i < 7; i++) {
+    g.beginPath();
+    let x = Math.random() * 256, y = Math.random() * 256;
+    g.moveTo(x, y);
+    for (let k = 0; k < 5; k++) { x += (Math.random() - 0.5) * 44; y += (Math.random() - 0.5) * 44; g.lineTo(x, y); }
+    g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+function mossTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#ccd0c2'; g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 2400; i++) {                      // moss / grass speckle
+    const v = Math.random();
+    g.fillStyle = v < 0.45 ? `rgba(96,124,74,${0.16 + Math.random() * 0.26})`
+                : v < 0.8 ? `rgba(140,158,104,${0.14 + Math.random() * 0.22})`
+                : `rgba(232,236,214,${0.12 + Math.random() * 0.18})`;
+    g.fillRect(Math.random() * 256, Math.random() * 256, 1 + Math.random() * 2.6, 1 + Math.random() * 3.4);
+  }
+  for (let i = 0; i < 320; i++) {                       // worn stone showing through
+    g.fillStyle = `rgba(112,116,128,${0.10 + Math.random() * 0.16})`;
+    g.beginPath(); g.arc(Math.random() * 256, Math.random() * 256, 0.8 + Math.random() * 2.4, 0, 7); g.fill();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+const stoneTex = stoneTexture();
+const mossTex = mossTexture();
 function auroraTexture() {
   const c = document.createElement('canvas'); c.width = 256; c.height = 256;
   const g = c.getContext('2d');
@@ -331,9 +384,9 @@ const skyMat = new THREE.ShaderMaterial({
     float fbm(vec2 p){ float v = 0.0; float a = 0.55; for(int i = 0; i < 3; i++){ v += a * vnoise(p); p = p * 2.13 + vec2(17.3, 9.1); a *= 0.5; } return v; }
     float hash31(vec3 p){ p = fract(p * 0.3183099 + vec3(0.1, 0.17, 0.13)); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
     void palette(float p, out vec3 zen, out vec3 hor, out vec3 bot){
-      zen = vec3(0.36,0.56,0.88); hor = vec3(1.00,0.76,0.52); bot = vec3(0.97,0.85,0.70);
-      vec3 z1=vec3(0.10,0.46,0.78), h1=vec3(0.55,0.86,0.90), b1=vec3(0.80,0.95,0.95);
-      vec3 z2=vec3(0.27,0.16,0.50), h2=vec3(0.99,0.43,0.55), b2=vec3(0.46,0.26,0.46);
+      zen = vec3(0.23,0.37,0.74); hor = vec3(0.94,0.63,0.38); bot = vec3(0.78,0.60,0.46);
+      vec3 z1=vec3(0.06,0.32,0.66), h1=vec3(0.38,0.66,0.72), b1=vec3(0.58,0.74,0.74);
+      vec3 z2=vec3(0.20,0.11,0.42), h2=vec3(0.86,0.32,0.42), b2=vec3(0.34,0.18,0.35);
       vec3 z3=vec3(0.015,0.03,0.13), h3=vec3(0.17,0.20,0.46), b3=vec3(0.05,0.06,0.19);
       float s1 = smoothstep(0.05, 0.38, p), s2 = smoothstep(0.42, 0.70, p), s3 = smoothstep(0.74, 0.98, p);
       zen = mix(mix(mix(zen, z1, s1), z2, s2), z3, s3);
@@ -348,18 +401,19 @@ const skyMat = new THREE.ShaderMaterial({
       vec3 sunDir = normalize(vec3(-0.45, 0.28, -0.6));
       float s = max(dot(dir, sunDir), 0.0);
       float dayF = 1.0 - uProgress * 0.75;
-      /* crisp sun disc + tight halo + broad warm glow */
-      col += vec3(1.0, 0.86, 0.58) * smoothstep(0.99925, 0.99965, s) * 2.6 * dayF;
-      col += vec3(1.0, 0.74, 0.42) * pow(s, 340.0) * 1.15 * dayF;
-      col += vec3(1.0, 0.75, 0.42) * pow(s, 220.0) * 1.4 * dayF;
-      col += vec3(1.0, 0.62, 0.30) * pow(s, 7.0) * 0.30 * (1.0 - uProgress * 0.6);
+      /* crisp sun disc + tight halo + broad warm glow (disc must read as a
+         disc — the old double halo blew a white hole in the sky) */
+      col += vec3(1.0, 0.84, 0.52) * smoothstep(0.99925, 0.99965, s) * 1.9 * dayF;
+      col += vec3(1.0, 0.72, 0.38) * pow(s, 340.0) * 0.8 * dayF;
+      col += vec3(1.0, 0.72, 0.38) * pow(s, 220.0) * 0.55 * dayF;
+      col += vec3(1.0, 0.60, 0.28) * pow(s, 7.0) * 0.22 * (1.0 - uProgress * 0.6);
       /* drifting noise cloud band hugging the horizon */
       vec2 cuv = dir.xz / (abs(h) + 0.28);
       float band = exp(-pow((h - 0.015) * 4.2, 2.0));
       float cl = fbm(cuv * 1.35 + vec2(uTime * 0.010, uTime * 0.004) + fbm(cuv * 0.7 - uTime * 0.006) * 1.4);
       float ca = smoothstep(0.48, 0.78, cl) * band;
-      vec3 cloudCol = mix(hor, vec3(1.02), 0.55) * (0.85 + 0.3 * dayF);
-      col = mix(col, cloudCol, ca * 0.55 * (1.0 - uProgress * 0.55));
+      vec3 cloudCol = mix(hor, vec3(0.90), 0.45) * (0.82 + 0.25 * dayF);
+      col = mix(col, cloudCol, ca * 0.45 * (1.0 - uProgress * 0.55));
       /* hash star twinkle woven into the night mix */
       float night = smoothstep(0.70, 0.97, uProgress);
       if (night > 0.001 && h > -0.05) {
@@ -376,10 +430,10 @@ scene.add(skyDome);
 
 /* JS-side palette (fog + lights follow the shader) */
 const PALETTES = [
-  { p: 0.00, hor: new THREE.Color(0xffc284), fog: new THREE.Color(0xf6cf9a), hemi: 0.95, sun: 2.6, sunCol: new THREE.Color(0xffd9a8) },
-  { p: 0.38, hor: new THREE.Color(0x8cdbE5), fog: new THREE.Color(0xbfe6ea), hemi: 1.05, sun: 2.9, sunCol: new THREE.Color(0xfff2d8) },
-  { p: 0.70, hor: new THREE.Color(0xfc6e8c), fog: new THREE.Color(0x9a6a92), hemi: 0.8,  sun: 2.2, sunCol: new THREE.Color(0xffab7a) },
-  { p: 1.00, hor: new THREE.Color(0x2e3380), fog: new THREE.Color(0x232a5e), hemi: 0.62, sun: 1.4, sunCol: new THREE.Color(0xaFC4ff) }
+  { p: 0.00, hor: new THREE.Color(0xffc284), fog: new THREE.Color(0xb1956f), hemi: 0.52, sun: 2.6, sunCol: new THREE.Color(0xffd9a8) },
+  { p: 0.38, hor: new THREE.Color(0x8cdbE5), fog: new THREE.Color(0x8aa6a8), hemi: 0.58, sun: 2.9, sunCol: new THREE.Color(0xfff2d8) },
+  { p: 0.70, hor: new THREE.Color(0xfc6e8c), fog: new THREE.Color(0x6f4c69), hemi: 0.44, sun: 2.2, sunCol: new THREE.Color(0xffab7a) },
+  { p: 1.00, hor: new THREE.Color(0x2e3380), fog: new THREE.Color(0x191e44), hemi: 0.34, sun: 1.4, sunCol: new THREE.Color(0xaFC4ff) }
 ];
 function paletteAt(p) {
   for (let i = 0; i < PALETTES.length - 1; i++) {
@@ -441,7 +495,7 @@ const curSunOff = new THREE.Vector3(-42, 66, -30);
 /* ---------- cloud sea ---------- */
 const cloudGroup = new THREE.Group(); scene.add(cloudGroup);
 const cloudGeo = new THREE.SphereGeometry(1, 18, 12);
-const cloudMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, transparent: true, opacity: 0.82, emissive: 0x8899bb, emissiveIntensity: 0.12 });
+const cloudMat = new THREE.MeshStandardMaterial({ color: 0xc9cbe0, roughness: 1, transparent: true, opacity: 0.66, emissive: 0x4a5578, emissiveIntensity: 0.06 });
 const clouds = [];
 for (let i = 0; i < 72; i++) {
   const m = new THREE.Mesh(cloudGeo, cloudMat);
@@ -471,7 +525,7 @@ const puffTex = puffTexture();
 const spriteCloudMats = [];
 for (let i = 0; i < 5; i++) {
   spriteCloudMats.push(new THREE.SpriteMaterial({ map: puffTex, transparent: true, depthWrite: false,
-    opacity: 0.34 + i * 0.09, color: 0xf6f9ff, fog: true }));
+    opacity: 0.27 + i * 0.07, color: 0xd9d4ee, fog: true }));
 }
 const spriteClouds = [];
 for (let i = 0; i < 120; i++) {
@@ -499,17 +553,17 @@ let whaleTube = null;
   const curve = new THREE.CatmullRomCurve3(pts);
   const tubeGeo = new THREE.TubeGeometry(curve, 340, 3.1, 14, false);
   const tubeMat = new THREE.MeshStandardMaterial({ map: planktonTexture(), color: 0xbdc8ff,
-    roughness: 0.55, metalness: 0.15, emissive: 0x1c2a66, emissiveIntensity: 0.5 });
+    roughness: 0.55, metalness: 0.15, emissive: 0x1c2a66, emissiveIntensity: 0.38 });
   whaleTube = new THREE.Mesh(tubeGeo, tubeMat);
   whaleTube.castShadow = true; whaleTube.receiveShadow = true;
   whaleGroup.add(whaleTube);
   /* belly glow strip */
-  const bellyMat = new THREE.MeshBasicMaterial({ color: 0x9fe8ff, transparent: true, opacity: 0.28 });
+  const bellyMat = new THREE.MeshBasicMaterial({ color: 0x9fe8ff, transparent: true, opacity: 0.20 });
   const belly = new THREE.Mesh(new THREE.TubeGeometry(curve, 200, 3.22, 10, false), bellyMat);
   belly.scale.set(0.96, 1, 0.96); whaleGroup.add(belly);
 
   const finMat = new THREE.MeshStandardMaterial({ color: 0x35448c, roughness: 0.5, metalness: 0.2,
-    emissive: 0x22306e, emissiveIntensity: 0.6, side: THREE.DoubleSide });
+    emissive: 0x22306e, emissiveIntensity: 0.45, side: THREE.DoubleSide });
   const finShape = new THREE.Shape();
   finShape.moveTo(0, 0); finShape.quadraticCurveTo(4.6, 1.1, 6.4, 5.4);
   finShape.quadraticCurveTo(3.0, 3.4, 0, 3.6); finShape.lineTo(0, 0);
@@ -535,18 +589,18 @@ let whaleTube = null;
   /* head + the great eye near the crown */
   const headP = pts[pts.length - 1].clone();
   const head = new THREE.Mesh(new THREE.SphereGeometry(4.6, 28, 22),
-    new THREE.MeshStandardMaterial({ map: tubeMat.map, color: 0xcdd6ff, roughness: 0.5, emissive: 0x1c2a66, emissiveIntensity: 0.5 }));
+    new THREE.MeshStandardMaterial({ map: tubeMat.map, color: 0xcdd6ff, roughness: 0.5, emissive: 0x1c2a66, emissiveIntensity: 0.38 }));
   head.position.copy(headP).add(new THREE.Vector3(0, 2.5, 0)); head.scale.set(1, 0.82, 1.16);
   whaleGroup.add(head);
   const eyeOut = new THREE.Vector3(Math.cos(pathAngle(GOAL_Y)), 0, Math.sin(pathAngle(GOAL_Y))).normalize();
   const eye = new THREE.Mesh(new THREE.SphereGeometry(1.55, 24, 18),
-    new THREE.MeshStandardMaterial({ color: 0x101828, emissive: 0x9fe8ff, emissiveIntensity: 1.6, roughness: 0.2 }));
+    new THREE.MeshStandardMaterial({ color: 0x101828, emissive: 0x9fe8ff, emissiveIntensity: 1.2, roughness: 0.2 }));
   eye.position.copy(head.position).add(eyeOut.clone().multiplyScalar(4.2)).add(new THREE.Vector3(0, 0.9, 0));
   whaleGroup.add(eye);
-  const eyeGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0x9fe8ff, transparent: true, opacity: 0.85, depthWrite: false }));
+  const eyeGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0x9fe8ff, transparent: true, opacity: 0.62, depthWrite: false }));
   eyeGlow.position.copy(eye.position); eyeGlow.scale.setScalar(11);
   whaleGroup.add(eyeGlow);
-  const eyeLight = new THREE.PointLight(0x9fe8ff, 300, 90, 1.8);
+  const eyeLight = new THREE.PointLight(0x9fe8ff, 220, 90, 1.8);
   eyeLight.position.copy(eye.position); whaleGroup.add(eyeLight);
 }
 
@@ -555,17 +609,17 @@ const summitGroup = new THREE.Group(); scene.add(summitGroup);
 const moonPos = pathPoint(GOAL_Y, 0).add(new THREE.Vector3(0, 11, 0));
 {
   const moon = new THREE.Mesh(new THREE.SphereGeometry(3.6, 36, 26),
-    new THREE.MeshStandardMaterial({ color: 0xfff6da, emissive: 0xffeeb8, emissiveIntensity: 1.65, roughness: 0.7 }));
+    new THREE.MeshStandardMaterial({ color: 0xfff6da, emissive: 0xffeeb8, emissiveIntensity: 1.3, roughness: 0.7 }));
   moon.position.copy(moonPos); summitGroup.add(moon);
-  const mg = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0xffeeb8, transparent: true, opacity: 0.9, depthWrite: false }));
+  const mg = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0xffeeb8, transparent: true, opacity: 0.7, depthWrite: false }));
   mg.position.copy(moonPos); mg.scale.setScalar(26); summitGroup.add(mg);
-  const ml = new THREE.PointLight(0xffe9b0, 900, 160, 1.7);
+  const ml = new THREE.PointLight(0xffe9b0, 700, 160, 1.7);
   ml.position.copy(moonPos); summitGroup.add(ml);
 }
 const crownCrystals = new THREE.Group(); summitGroup.add(crownCrystals);
 {
   const cg = new THREE.OctahedronGeometry(1);
-  const cm = new THREE.MeshStandardMaterial({ color: 0xcfe8ff, emissive: 0x7fb8ff, emissiveIntensity: 1.1,
+  const cm = new THREE.MeshStandardMaterial({ color: 0xcfe8ff, emissive: 0x7fb8ff, emissiveIntensity: 0.85,
     roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.92 });
   for (let i = 0; i < 9; i++) {
     const a = (i / 9) * Math.PI * 2;
@@ -624,13 +678,13 @@ function auroraMaterial(hueShift) {
 
 /* ---------- zones & platforms ---------- */
 const ZONES = [
-  { to: 30,  name: '珊瑚の尾',       col: 0x7ecb8f, acc: 0xff9fb0 },
-  { to: 65,  name: '鱗の海原',       col: 0x6fd8d0, acc: 0xb18cff },
-  { to: 100, name: '骨帆の夕',       col: 0xf2ead8, acc: 0xffab7a },
-  { to: 135, name: '星屑の結晶',     col: 0x8fb8ff, acc: 0x67f2ff },
-  { to: 180, name: '雲の墓地',       col: 0xe6d3a3, acc: 0xc9a86a },
-  { to: 225, name: 'オーロラ海',     col: 0x86ffd8, acc: 0xb18cff },
-  { to: 999, name: '月冠',           col: 0xf4f6ff, acc: 0xe8c877 }
+  { to: 30,  name: '珊瑚の尾',       col: 0x63bd7d, acc: 0xff8aa5 },
+  { to: 65,  name: '鱗の海原',       col: 0x4fc4bc, acc: 0x9d78f5 },
+  { to: 100, name: '骨帆の夕',       col: 0xe6d7bc, acc: 0xff9a5c },
+  { to: 135, name: '星屑の結晶',     col: 0x74a4f8, acc: 0x4fe0f8 },
+  { to: 180, name: '雲の墓地',       col: 0xd9bd82, acc: 0xbd9a52 },
+  { to: 225, name: 'オーロラ海',     col: 0x64f2c4, acc: 0x9d78f5 },
+  { to: 999, name: '月冠',           col: 0xdde4fa, acc: 0xe8c877 }
 ];
 const zoneOf = y => ZONES.findIndex(z => y < z.to);
 const zoneName = y => ZONES[zoneOf(y)].name;
@@ -641,17 +695,42 @@ const platGeoHex = new THREE.CylinderGeometry(1, 0.92, 0.4, 6);
 const platGeoBox = new THREE.BoxGeometry(1, 0.4, 1);
 const platGeoCrys = new THREE.CylinderGeometry(1, 0.7, 0.5, 6);
 const spikeGeo = new THREE.OctahedronGeometry(1);
+const capGeoCyl = new THREE.CylinderGeometry(0.985, 0.94, 0.08, 26);
+const capGeoHex = new THREE.CylinderGeometry(0.985, 0.94, 0.08, 6);
+const capGeoBox = new THREE.BoxGeometry(1, 0.08, 1);
+const bandGeoCyl = new THREE.CylinderGeometry(1.015, 1.015, 0.09, 26);
+const bandGeoHex = new THREE.CylinderGeometry(1.015, 1.015, 0.09, 6);
+const bandGeoBox = new THREE.BoxGeometry(1, 0.08, 1);
 const sharedMats = {};
 function zoneMat(zone, kind) {
   const key = zone + kind;
   if (sharedMats[key]) return sharedMats[key];
   const z = ZONES[zone];
   let m;
-  if (zone === 1) m = new THREE.MeshStandardMaterial({ color: z.col, roughness: 0.22, metalness: 0.65, emissive: z.col, emissiveIntensity: 0.24, flatShading: true });
-  else if (zone === 3) m = new THREE.MeshStandardMaterial({ color: z.col, roughness: 0.18, metalness: 0.2, emissive: 0x4a86ff, emissiveIntensity: 0.55, transparent: true, opacity: 0.94, flatShading: true });
-  else if (zone === 5) m = new THREE.MeshStandardMaterial({ color: z.col, roughness: 0.1, metalness: 0.1, emissive: 0x2affc0, emissiveIntensity: 0.3, transparent: true, opacity: 0.6 });
-  else if (zone === 6) m = new THREE.MeshStandardMaterial({ color: z.col, roughness: 0.32, metalness: 0.55, emissive: 0xbfc8ff, emissiveIntensity: 0.18 });
-  else m = new THREE.MeshStandardMaterial({ color: z.col, roughness: 0.62, metalness: 0.08, emissive: z.acc, emissiveIntensity: 0.07 });
+  if (zone === 1) m = new THREE.MeshStandardMaterial({ color: z.col, map: stoneTex, roughnessMap: stoneTex, roughness: 0.5, metalness: 0.55, emissive: z.col, emissiveIntensity: 0.16, flatShading: true });
+  else if (zone === 3) m = new THREE.MeshStandardMaterial({ color: z.col, map: stoneTex, roughnessMap: stoneTex, roughness: 0.35, metalness: 0.2, emissive: 0x4a86ff, emissiveIntensity: 0.34, transparent: true, opacity: 0.94, flatShading: true });
+  else if (zone === 5) m = new THREE.MeshStandardMaterial({ color: z.col, roughness: 0.1, metalness: 0.1, emissive: 0x2affc0, emissiveIntensity: 0.2, transparent: true, opacity: 0.6 });
+  else if (zone === 6) m = new THREE.MeshStandardMaterial({ color: z.col, map: stoneTex, roughnessMap: stoneTex, roughness: 0.55, metalness: 0.45, emissive: 0xbfc8ff, emissiveIntensity: 0.12 });
+  else m = new THREE.MeshStandardMaterial({ color: z.col, map: stoneTex, roughnessMap: stoneTex, roughness: 0.85, metalness: 0.06, emissive: z.acc, emissiveIntensity: 0.05 });
+  sharedMats[key] = m; return m;
+}
+/* platform dressing: lighter mossy cap on top, darker stone band below */
+const capWhite = new THREE.Color(0xffffff);
+function capMat(zone) {
+  const key = zone + 'cap';
+  if (sharedMats[key]) return sharedMats[key];
+  const z = ZONES[zone];
+  const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(z.col).lerp(capWhite, 0.30),
+    map: zone === 3 ? stoneTex : mossTex, roughnessMap: stoneTex, roughness: 0.95, metalness: 0.02,
+    emissive: z.acc, emissiveIntensity: 0.03 });
+  sharedMats[key] = m; return m;
+}
+function rimMat(zone) {
+  const key = zone + 'rim';
+  if (sharedMats[key]) return sharedMats[key];
+  const z = ZONES[zone];
+  const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(z.col).multiplyScalar(0.42),
+    map: stoneTex, roughness: 0.95, metalness: 0.05 });
   sharedMats[key] = m; return m;
 }
 const rimGeo = new THREE.TorusGeometry(1, 0.045, 8, 40);
@@ -664,7 +743,7 @@ function makePlatformMesh(zone, r, beam, beamWid = 0.425) {
     body.scale.set(r * 2, 1, beamWid * 2); hx = r; hz = beamWid; isBox = true;
   } else if (zone === 0) {
     body = new THREE.Mesh(platGeoCyl, zoneMat(zone, 'c')); body.scale.set(r, 1, r);
-    const petal = new THREE.Mesh(platGeoCyl, new THREE.MeshStandardMaterial({ color: z.acc, roughness: 0.7, emissive: z.acc, emissiveIntensity: 0.15 }));
+    const petal = new THREE.Mesh(platGeoCyl, new THREE.MeshStandardMaterial({ color: z.acc, roughness: 0.7, emissive: z.acc, emissiveIntensity: 0.10 }));
     petal.scale.set(r * 0.62, 0.5, r * 0.62); petal.position.y = 0.22; g.add(petal);
   } else if (zone === 1) {
     body = new THREE.Mesh(platGeoHex, zoneMat(zone, 'h')); body.scale.set(r, 1, r);
@@ -689,11 +768,27 @@ function makePlatformMesh(zone, r, beam, beamWid = 0.425) {
     body = new THREE.Mesh(platGeoCyl, zoneMat(zone, 'c')); body.scale.set(r, 1, r);
   } else {
     body = new THREE.Mesh(platGeoCyl, zoneMat(zone, 'c')); body.scale.set(r, 1, r);
-    const rim = new THREE.Mesh(rimGeo, new THREE.MeshStandardMaterial({ color: 0xe8c877, metalness: 0.9, roughness: 0.25, emissive: 0xe8c877, emissiveIntensity: 0.35 }));
+    const rim = new THREE.Mesh(rimGeo, new THREE.MeshStandardMaterial({ color: 0xe8c877, metalness: 0.9, roughness: 0.25, emissive: 0xe8c877, emissiveIntensity: 0.26 }));
     rim.rotation.x = Math.PI / 2; rim.scale.setScalar(r); rim.position.y = 0.21; g.add(rim);
   }
   body.castShadow = true; body.receiveShadow = true;
   g.add(body);
+  /* two-tone dressing: a lighter textured cap whose top face sits exactly
+     at the collision top (y = 0.21), plus a darker stone band under the rim.
+     Zone 5's ghost platforms stay bare; zone 3's tapered crystals take the
+     cap only (a band would float off their sloped sides). */
+  if (zone !== 5) {
+    const cap = new THREE.Mesh(isBox ? capGeoBox : (zone === 1 || zone === 3 ? capGeoHex : capGeoCyl), capMat(zone));
+    if (isBox) cap.scale.set(hx * 2 * 0.99, 1, hz * 2 * 0.99); else cap.scale.set(r, 1, r);
+    cap.position.y = 0.17; cap.receiveShadow = true;
+    g.add(cap);
+    if (zone !== 3) {
+      const band = new THREE.Mesh(isBox ? bandGeoBox : (zone === 1 ? bandGeoHex : bandGeoCyl), rimMat(zone));
+      if (isBox) band.scale.set(hx * 2 * 1.02, 1, hz * 2 * 1.02); else band.scale.set(r, 1, r);
+      band.position.y = 0.115; band.receiveShadow = true;
+      g.add(band);
+    }
+  }
   return { g, hx, hz, isBox };
 }
 function addPlatform(pos, r, opts = {}) {
@@ -703,7 +798,7 @@ function addPlatform(pos, r, opts = {}) {
   if (isBox) g.rotation.y = opts.yaw !== undefined ? opts.yaw : -pathAngle(pos.y) + Math.PI / 2;
   scene.add(g);
   if (opts.kind === 'bounce') {   // springy cloud pad: soft white puffs over the base disc
-    const puffMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, emissive: 0xaac4e8, emissiveIntensity: 0.18 });
+    const puffMat = new THREE.MeshStandardMaterial({ color: 0xe8e6f2, roughness: 1, emissive: 0xaac4e8, emissiveIntensity: 0.12 });
     const puffGeo = new THREE.SphereGeometry(1, 14, 10);
     for (const [ox, oz, s] of [[0, 0, 1.15], [-0.45, 0.2, 0.8], [0.48, -0.15, 0.85], [0.1, 0.45, 0.7]]) {
       const m = new THREE.Mesh(puffGeo, puffMat);
@@ -1077,7 +1172,7 @@ for (const i of [0, 1, 2]) {
   platforms[i].g.traverse(o => {
     if (o.isMesh) {
       o.material = o.material.clone();
-      if ('emissiveIntensity' in o.material) { o.material.emissive = new THREE.Color(0xffc766); o.material.emissiveIntensity = 0.5; }
+      if ('emissiveIntensity' in o.material) { o.material.emissive = new THREE.Color(0xffc766); o.material.emissiveIntensity = 0.38; }
     }
   });
 }
@@ -1087,9 +1182,9 @@ const startPos = pathPoint(0, 0.5); startPos.y = 0;
 const startGround = (() => {
   const g = new THREE.Group();
   const disc = new THREE.Mesh(new THREE.CylinderGeometry(9.5, 8.2, 1.2, 36),
-    new THREE.MeshStandardMaterial({ color: 0x527a68, roughness: 0.9 }));
+    new THREE.MeshStandardMaterial({ color: 0x527a68, map: mossTex, roughnessMap: stoneTex, roughness: 0.9 }));
   disc.position.y = -0.6; disc.receiveShadow = true; disc.castShadow = true; g.add(disc);
-  const coralMat = new THREE.MeshStandardMaterial({ color: 0xff9fb0, roughness: 0.6, emissive: 0xff7f9d, emissiveIntensity: 0.25 });
+  const coralMat = new THREE.MeshStandardMaterial({ color: 0xff9fb0, roughness: 0.6, emissive: 0xff7f9d, emissiveIntensity: 0.18 });
   for (let i = 0; i < 7; i++) {
     const a = i * 0.95 + 0.4;
     const c = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.6 + (i % 3) * 0.6, 7), coralMat);
@@ -1110,7 +1205,7 @@ const updrafts = [];
     const m = new THREE.Mesh(upGeo, mat);
     m.position.set(base.x, by + 17, base.z); m.visible = false;
     scene.add(m);
-    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0xffd977, transparent: true, opacity: 0.6, depthWrite: false }));
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0xffd977, transparent: true, opacity: 0.45, depthWrite: false }));
     glow.position.set(base.x, by + 1.2, base.z); glow.scale.setScalar(7); glow.visible = false; scene.add(glow);
     /* per-pillar ignition: each pillar wakes once the player has climbed
        high enough to have nearly reached the next one, so the express
@@ -1136,7 +1231,7 @@ for (const w of windColumns) {
   }
   const pg = new THREE.BufferGeometry();
   pg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  const pts = new THREE.Points(pg, new THREE.PointsMaterial({ color: 0xd8f4ff, size: 0.3, map: softGlowTex, transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending }));
+  const pts = new THREE.Points(pg, new THREE.PointsMaterial({ color: 0xd8f4ff, size: 0.27, map: softGlowTex, transparent: true, opacity: 0.62, depthWrite: false, blending: THREE.AdditiveBlending }));
   scene.add(pts);
   windVisuals.push({ w, cyl, pts, spd });
 }
@@ -1146,20 +1241,20 @@ const guide = { on: true };
 const guideGroup = new THREE.Group(); scene.add(guideGroup);
 {
   const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.88, 1.44, 15, 14, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0xaee9ff, transparent: true, opacity: 0.42,
+    new THREE.MeshBasicMaterial({ color: 0xaee9ff, transparent: true, opacity: 0.32,
       side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
   pillar.position.y = 7.5; pillar.name = 'guidePillar'; guideGroup.add(pillar);
   const mark = new THREE.Mesh(new THREE.ConeGeometry(0.59, 1.47, 4),
-    new THREE.MeshBasicMaterial({ color: 0xffd977, transparent: true, opacity: 0.95, fog: false }));
+    new THREE.MeshBasicMaterial({ color: 0xffd977, transparent: true, opacity: 0.72, fog: false }));
   mark.rotation.x = Math.PI;   /* apex down: a small floating chevron */
   mark.name = 'guideMark'; guideGroup.add(mark);
-  const markGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0xffd977, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+  const markGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0xffd977, transparent: true, opacity: 0.41, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
   markGlow.scale.setScalar(3.4); mark.add(markGlow);   /* halo rides with the chevron */
   const ring = new THREE.Mesh(new THREE.RingGeometry(1.0, 1.45, 40),
-    new THREE.MeshBasicMaterial({ color: 0xaee9ff, transparent: true, opacity: 0.3,
+    new THREE.MeshBasicMaterial({ color: 0xaee9ff, transparent: true, opacity: 0.23,
       side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
   ring.rotation.x = -Math.PI / 2; ring.position.y = 0.07; ring.name = 'guideRing'; guideGroup.add(ring);
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0xaee9ff, transparent: true, opacity: 0.5, depthWrite: false, fog: false }));
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0xaee9ff, transparent: true, opacity: 0.38, depthWrite: false, fog: false }));
   glow.scale.setScalar(4.5); glow.position.y = 1.1; guideGroup.add(glow);
 }
 
@@ -1183,7 +1278,7 @@ const LORE = [
 const shards = [];
 {
   const sGeo = new THREE.OctahedronGeometry(0.55);
-  const sMat = new THREE.MeshStandardMaterial({ color: 0xbdf3ff, emissive: 0x54c8ff, emissiveIntensity: 1.8, roughness: 0.15, transparent: true, opacity: 0.95 });
+  const sMat = new THREE.MeshStandardMaterial({ color: 0xbdf3ff, emissive: 0x54c8ff, emissiveIntensity: 1.3, roughness: 0.15, transparent: true, opacity: 0.95 });
   const glowT = softGlowTex;
   /* positions come from the route builder: four are prizes on the
      optional detours, one floats at a balance beam's midpoint, one
@@ -1193,7 +1288,7 @@ const shards = [];
     const g = new THREE.Group();
     g.position.set(ss.x, ss.y, ss.z);
     const core = new THREE.Mesh(sGeo, sMat); core.scale.set(0.7, 1.25, 0.7); g.add(core);
-    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowT, color: 0x8fe0ff, transparent: true, opacity: 0.8, depthWrite: false }));
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowT, color: 0x8fe0ff, transparent: true, opacity: 0.6, depthWrite: false }));
     spr.scale.setScalar(3.4); g.add(spr);
     scene.add(g);
     shards.push({ g, core, got: false, lore: LORE[i], idx: i, baseY: g.position.y });
@@ -1205,8 +1300,8 @@ const flocks = [];
 {
   const fishGeo = new THREE.ConeGeometry(0.32, 1.5, 6);
   const wingGeo = new THREE.PlaneGeometry(1.5, 0.5);
-  const fishMat = new THREE.MeshBasicMaterial({ color: 0xaef2ff, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
-  const wingMat = new THREE.MeshBasicMaterial({ color: 0xffd9ec, transparent: true, opacity: 0.55, side: THREE.DoubleSide });
+  const fishMat = new THREE.MeshBasicMaterial({ color: 0xaef2ff, transparent: true, opacity: 0.8, side: THREE.DoubleSide });
+  const wingMat = new THREE.MeshBasicMaterial({ color: 0xffd9ec, transparent: true, opacity: 0.45, side: THREE.DoubleSide });
   [[38, 30], [92, 36], [150, 30], [212, 38], [246, 24]].forEach(([hy, rr], fi) => {
     const grp = new THREE.Group(); scene.add(grp);
     const fishes = [];
@@ -1228,7 +1323,7 @@ let dust, dustPos;
   for (let i = 0; i < N; i++) dustPos.set([(Math.random() - 0.5) * 44, (Math.random() - 0.5) * 44, (Math.random() - 0.5) * 44], i * 3);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
-  dust = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffe9b8, size: 0.16, transparent: true, opacity: 0.85, map: softGlowTex, depthWrite: false, blending: THREE.AdditiveBlending }));
+  dust = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffe9b8, size: 0.14, transparent: true, opacity: 0.55, map: softGlowTex, depthWrite: false, blending: THREE.AdditiveBlending }));
   scene.add(dust);
 }
 
@@ -1244,9 +1339,9 @@ let planktonPts = null;
   const NI = islandY.length;
   const dummy = new THREE.Object3D();
   const rockI = new THREE.InstancedMesh(new THREE.ConeGeometry(2.7, 5.2, 7),
-    new THREE.MeshStandardMaterial({ color: 0x6d6480, roughness: 0.95, flatShading: true }), NI);
+    new THREE.MeshStandardMaterial({ color: 0x8a8296, map: stoneTex, roughnessMap: stoneTex, roughness: 0.95, flatShading: true }), NI);
   const grassI = new THREE.InstancedMesh(new THREE.CylinderGeometry(2.45, 2.7, 0.4, 18),
-    new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 }), NI);
+    new THREE.MeshStandardMaterial({ color: 0xffffff, map: mossTex, roughness: 0.9 }), NI);
   const trunkI = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.13, 0.2, 1.2, 6),
     new THREE.MeshStandardMaterial({ color: 0x7a5b40, roughness: 1 }), NI);
   const folI = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1.1, 0),
@@ -1277,9 +1372,9 @@ let planktonPts = null;
   scene.add(rockI, grassI, trunkI, folI);
   /* (b) glowing lantern-buoy rings floating between platforms */
   const buoyRingGeo = new THREE.TorusGeometry(0.85, 0.09, 8, 24);
-  const buoyRingMat = new THREE.MeshStandardMaterial({ color: 0xe8c877, metalness: 0.85, roughness: 0.3, emissive: 0xe8c877, emissiveIntensity: 0.5 });
+  const buoyRingMat = new THREE.MeshStandardMaterial({ color: 0xe8c877, metalness: 0.85, roughness: 0.3, emissive: 0xe8c877, emissiveIntensity: 0.4 });
   const buoyCoreGeo = new THREE.SphereGeometry(0.30, 12, 10);
-  const buoyCoreMat = new THREE.MeshStandardMaterial({ color: 0xfff1c4, emissive: 0xffca66, emissiveIntensity: 2.4, roughness: 0.4 });
+  const buoyCoreMat = new THREE.MeshStandardMaterial({ color: 0xfff1c4, emissive: 0xffca66, emissiveIntensity: 1.6, roughness: 0.4 });
   for (let y = 16; y < 250; y += 26) {
     const g = new THREE.Group();
     const mid = pathPoint(y, (srand() - 0.5) * 2);
@@ -1291,7 +1386,7 @@ let planktonPts = null;
     lanterns.push({ g, ring, baseY: g.position.y, ph: srand() * 9 });
   }
   /* (c) light-waterfall particle streams at three scenic spots */
-  const fallMat = new THREE.PointsMaterial({ color: 0xbfeaff, size: 0.3, map: softGlowTex, transparent: true, opacity: 0.75, depthWrite: false, blending: THREE.AdditiveBlending });
+  const fallMat = new THREE.PointsMaterial({ color: 0xbfeaff, size: 0.28, map: softGlowTex, transparent: true, opacity: 0.58, depthWrite: false, blending: THREE.AdditiveBlending });
   for (const fy of [46, 122, 205]) {
     const base = pathPoint(fy, 4.6);
     const N = 170, pos = new Float32Array(N * 3), spd = new Float32Array(N);
@@ -1321,7 +1416,7 @@ let planktonPts = null;
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    planktonPts = new THREE.Points(g, new THREE.PointsMaterial({ color: 0x8fe8ff, size: 0.34, map: softGlowTex, transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending }));
+    planktonPts = new THREE.Points(g, new THREE.PointsMaterial({ color: 0x8fe8ff, size: 0.27, map: softGlowTex, transparent: true, opacity: 0.62, depthWrite: false, blending: THREE.AdditiveBlending }));
     scene.add(planktonPts);
   }
 }
@@ -1349,7 +1444,7 @@ function ribbonGeometry() {
 }
 {
   const skinMat = new THREE.MeshStandardMaterial({ color: 0xf2f6ff, roughness: 0.22, metalness: 0.05,
-    emissive: 0x9fc8ff, emissiveIntensity: 0.16, transparent: true, opacity: 0.96 });
+    emissive: 0x9fc8ff, emissiveIntensity: 0.10, transparent: true, opacity: 0.96 });
   /* teardrop body via Lathe */
   const pts = [];
   pts.push(new THREE.Vector2(0.001, 0));
@@ -1363,11 +1458,11 @@ function ribbonGeometry() {
   body.castShadow = true; primVisual.add(body);
   /* glowing core */
   charCore = new THREE.Mesh(new THREE.SphereGeometry(0.20, 18, 14),
-    new THREE.MeshStandardMaterial({ color: 0xbfeaff, emissive: 0x6fd2ff, emissiveIntensity: 1.7, roughness: 0.3 }));
+    new THREE.MeshStandardMaterial({ color: 0xbfeaff, emissive: 0x6fd2ff, emissiveIntensity: 1.2, roughness: 0.3 }));
   charCore.position.set(0, 0.45, 0.30); primVisual.add(charCore);
-  const coreGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0x8fd8ff, transparent: true, opacity: 0.55, depthWrite: false }));
+  const coreGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0x8fd8ff, transparent: true, opacity: 0.40, depthWrite: false }));
   coreGlow.position.copy(charCore.position); coreGlow.scale.setScalar(1.25); primVisual.add(coreGlow);
-  const coreLight = new THREE.PointLight(0x7fd0ff, 7, 11, 1.8);
+  const coreLight = new THREE.PointLight(0x7fd0ff, 5, 11, 1.8);
   coreLight.position.set(0, 0.7, 0.4); primVisual.add(coreLight);
   /* eyes */
   const eyeMat = new THREE.MeshStandardMaterial({ color: 0x141c30, roughness: 0.15 });
@@ -1377,17 +1472,17 @@ function ribbonGeometry() {
     const h = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffffff }));
     h.position.set(0.135 * s, 0.75, 0.44); primVisual.add(h);
     const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8),
-      new THREE.MeshStandardMaterial({ color: 0xffaFC6, roughness: 0.8, emissive: 0xff8fb0, emissiveIntensity: 0.25 }));
+      new THREE.MeshStandardMaterial({ color: 0xffaFC6, roughness: 0.8, emissive: 0xff8fb0, emissiveIntensity: 0.18 }));
     cheek.position.set(0.30 * s, 0.52, 0.33); cheek.scale.set(1, 0.7, 0.5); primVisual.add(cheek);
   }
   /* ribbon fins */
   const ribGeo = ribbonGeometry();
-  const ribMat = new THREE.MeshStandardMaterial({ color: 0xa8dcff, roughness: 0.35, emissive: 0x5fb8ff, emissiveIntensity: 0.4, side: THREE.DoubleSide, transparent: true, opacity: 0.96 });
+  const ribMat = new THREE.MeshStandardMaterial({ color: 0xa8dcff, roughness: 0.35, emissive: 0x5fb8ff, emissiveIntensity: 0.28, side: THREE.DoubleSide, transparent: true, opacity: 0.96 });
   ribbonL = new THREE.Mesh(ribGeo, ribMat); ribbonL.position.set(-0.30, 1.06, -0.05); ribbonL.rotation.z = 0.55; primVisual.add(ribbonL);
   ribbonR = new THREE.Mesh(ribGeo, ribMat.clone()); ribbonR.position.set(0.30, 1.06, -0.05); ribbonR.rotation.z = -0.55; ribbonR.scale.x = -1; primVisual.add(ribbonR);
   /* back fin (grows at 25m unlock) */
   backFin = new THREE.Mesh(new THREE.ConeGeometry(0.20, 0.62, 4),
-    new THREE.MeshStandardMaterial({ color: 0x8fd8ff, roughness: 0.3, emissive: 0x4aa8ff, emissiveIntensity: 0.5, flatShading: true }));
+    new THREE.MeshStandardMaterial({ color: 0x8fd8ff, roughness: 0.3, emissive: 0x4aa8ff, emissiveIntensity: 0.36, flatShading: true }));
   backFin.position.set(0, 0.72, -0.42); backFin.rotation.x = -0.7; backFin.scale.setScalar(0.001); primVisual.add(backFin);
   /* little feet */
   const footMat = new THREE.MeshStandardMaterial({ color: 0xdff2ff, roughness: 0.5 });
@@ -1398,7 +1493,7 @@ function ribbonGeometry() {
 }
 /* halo (100m unlock) — kept at group level so it also fits a GLB visual */
 haloRing = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.045, 10, 32),
-  new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffd977, emissiveIntensity: 1.5, metalness: 0.7, roughness: 0.25 }));
+  new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffd977, emissiveIntensity: 1.05, metalness: 0.7, roughness: 0.25 }));
 haloRing.position.y = 1.62; haloRing.rotation.x = Math.PI / 2.25; haloRing.visible = false;
 playerGroup.add(haloRing);
 
@@ -1552,7 +1647,7 @@ for (let i = 0; i < TRAIL_N; i++) {
 const trailGeo = new THREE.BufferGeometry();
 trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
 trailGeo.setAttribute('color', new THREE.BufferAttribute(trailCol, 3));
-const trailPts = new THREE.Points(trailGeo, new THREE.PointsMaterial({ size: 0.34, map: softGlowTex, vertexColors: true, transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending }));
+const trailPts = new THREE.Points(trailGeo, new THREE.PointsMaterial({ size: 0.3, map: softGlowTex, vertexColors: true, transparent: true, opacity: 0.7, depthWrite: false, blending: THREE.AdditiveBlending }));
 scene.add(trailPts);
 
 /* ---------- HUD / toast ---------- */
@@ -1802,7 +1897,10 @@ function loadWithTimeout(loader, url, ms = 9000) {
   const loader = new GLTFLoader();
   loadWithTimeout(loader, './assets/shizuku.glb').then(gltf => {
     gltf.scene.traverse(o => {
-      if (o.isMesh && o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity = 0.4;
+      if (o.isMesh && o.material) for (const m of [o.material].flat()) {
+        if ('envMapIntensity' in m) m.envMapIntensity = 0.28;
+        if ('emissiveIntensity' in m && m.emissiveIntensity > 0.9) m.emissiveIntensity = 0.9;
+      }
       if (o.isLight) o.intensity *= 0.5;   /* cap any GLB-baked light so the core cannot blow out */
     });
     const holder = new THREE.Group();
@@ -1812,7 +1910,14 @@ function loadWithTimeout(loader, url, ms = 9000) {
     primVisual.visible = false;
   }).catch(() => { /* primitive character stays */ });
   loadWithTimeout(loader, './assets/sorakujira.glb', 12000).then(gltf => {
-    gltf.scene.traverse(o => { if (o.isMesh && o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity = 0.4; });
+    gltf.scene.traverse(o => {
+      if (o.isMesh && o.material) for (const m of [o.material].flat()) {
+        if ('envMapIntensity' in m) m.envMapIntensity = 0.28;
+        /* visual overhaul: the v5 skin's baked emissives must accent, not
+           flood — cap every emissive so the whale never blooms into a blob */
+        if ('emissiveIntensity' in m && m.emissiveIntensity > 0.55) m.emissiveIntensity = 0.55;
+      }
+    });
     const w = fitToHeight(gltf.scene, 268);
     w.position.y = -3;
     scene.add(w);
@@ -1820,7 +1925,7 @@ function loadWithTimeout(loader, url, ms = 9000) {
     summitGroup.visible = true; /* crown & moon always remain */
   }).catch(() => { /* procedural whale stays */ });
   loadWithTimeout(loader, './assets/crystal.glb').then(gltf => {
-    gltf.scene.traverse(o => { if (o.isMesh && o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity = 0.4; });
+    gltf.scene.traverse(o => { if (o.isMesh && o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity = 0.28; });
     const proto = gltf.scene;
     const put = (parent, h) => { const c = proto.clone(true); fitToHeight(c, h); parent.add(c); };
     for (const sh of shards) { sh.core.visible = false; put(sh.g, 1.35); }
@@ -1838,7 +1943,7 @@ function loadWithTimeout(loader, url, ms = 9000) {
       const src = byName[lm.propName];
       if (!src) continue;
       const c = src.clone(true);
-      c.traverse(o => { if (o.isMesh && o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity = 0.4; });
+      c.traverse(o => { if (o.isMesh && o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity = 0.28; });
       c.position.set(lm.position.x, lm.position.y, lm.position.z);
       c.rotation.y = lm.rotationY;
       c.scale.setScalar(lm.scale);
@@ -1848,7 +1953,7 @@ function loadWithTimeout(loader, url, ms = 9000) {
 }
 
 /* soften environment reflections on everything built so far */
-scene.traverse(o => { if (o.isMesh && o.material && o.material.isMeshStandardMaterial) o.material.envMapIntensity = 0.4; });
+scene.traverse(o => { if (o.isMesh && o.material && o.material.isMeshStandardMaterial) o.material.envMapIntensity = 0.28; });
 
 /* ---------- animation ---------- */
 const clock = new THREE.Clock();
@@ -1905,7 +2010,7 @@ function animate() {
   }
   haloRing.visible = S.unlocks.updraft;
   if (haloRing.visible) { haloRing.rotation.z += dt * 0.8; haloRing.position.y = 1.62 + Math.sin(t * 2) * 0.05; }
-  bootSparks.material.opacity = S.unlocks.boots ? 0.65 + Math.sin(t * 6) * 0.25 : 0;
+  bootSparks.material.opacity = S.unlocks.boots ? 0.5 + Math.sin(t * 6) * 0.2 : 0;
   bootSparks.rotation.y += dt * 2.4;
   /* shards / crown / moon */
   for (const sh of shards) if (!sh.got) {
@@ -1921,15 +2026,15 @@ function animate() {
     if (guideGroup.visible) {
       guideGroup.position.set(tgt.g.position.x, topY(tgt), tgt.g.position.z);
       const pl = guideGroup.getObjectByName('guidePillar');
-      if (pl) pl.material.opacity = 0.42 + Math.sin(t * 2.2) * 0.13;   /* pulse peak 0.55, fog:false keeps it visible */
+      if (pl) pl.material.opacity = 0.32 + Math.sin(t * 2.2) * 0.10;   /* pulse peak 0.42 — dimmer than before, but the darkened sky/fog makes it read clearer */
       const mk = guideGroup.getObjectByName('guideMark');
       if (mk) { mk.position.y = 3.1 + Math.sin(t * 2.2) * 0.35; mk.rotation.y = t * 1.4; }
       const gr = guideGroup.getObjectByName('guideRing');
-      if (gr) { gr.material.opacity = 0.30 + Math.sin(t * 2.2) * 0.13; gr.scale.setScalar(1 + Math.sin(t * 2.2) * 0.07); }
+      if (gr) { gr.material.opacity = 0.23 + Math.sin(t * 2.2) * 0.10; gr.scale.setScalar(1 + Math.sin(t * 2.2) * 0.07); }
     }
   }
   /* updraft shimmer (lit pillars only) */
-  for (const u of updrafts) if (u.lit) u.mesh.material.opacity = 0.13 + Math.sin(t * 2.6 + u.y0) * 0.05;
+  for (const u of updrafts) if (u.lit) u.mesh.material.opacity = 0.11 + Math.sin(t * 2.6 + u.y0) * 0.04;
   /* clouds drift */
   for (const c of clouds) {
     c.m.position.x += Math.sin(t * 0.05 + c.ph) * 0.006 + c.sp * dt;
@@ -1983,7 +2088,7 @@ function animate() {
     ln.ring.rotation.y = t * 0.4;
   }
   /* plankton sparkles breathe */
-  if (planktonPts) planktonPts.material.opacity = 0.6 + Math.sin(t * 1.8) * 0.25;
+  if (planktonPts) planktonPts.material.opacity = 0.45 + Math.sin(t * 1.8) * 0.17;
   /* landing puffs & dash ghosts */
   for (let i = landingPuffs.length - 1; i >= 0; i--) {
     const pf = landingPuffs[i]; pf.life -= dt;
