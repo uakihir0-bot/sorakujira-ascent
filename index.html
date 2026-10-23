@@ -756,17 +756,20 @@ var summitPlat = platforms[platforms.length - 1];
   p0.base.y = 1.8; p0.g.position.y = 1.8; p0.prev.y = 1.8;
   /* P0: the two summit platforms must be static (idx159 rolled 'crumble'). */
   for (const i of [158, 159]) { const p = byIdx(i); p.kind = 'static'; p.crumbleState = 0; }
-  /* P1 ability gates: platforms pushed radially outward (+4.2m) so the gap
-     can only be crossed with the air dash (unlocked at 50m; all three gates
-     sit far above that, with glide and boots also available). */
+  /* P1 ability gates: platforms pushed radially outward (+7.5m) so the
+     entry gap exceeds the base jump's flat reach (audit3: entries land at
+     4.50–5.14m vs base reach 4.34m, radii already subtracted) and can only
+     be crossed with the double jump / air dash (both unlocked far below;
+     glide and boots are also available up here). Gate exits are likewise
+     ability jumps (4.87–5.59m), so the ledge beyond is earned ground. */
   const radialOut = (p, d) => {
     const a = pathAngle(p.base.y);
     p.base.x += Math.cos(a) * d; p.base.z += Math.sin(a) * d;
     p.g.position.copy(p.base); p.prev.copy(p.base);
   };
-  radialOut(byIdx(96), 4.2);    /* 157.7m — between a beam and a rotor */
-  radialOut(byIdx(124), 4.2);   /* 203.1m */
-  radialOut(byIdx(152), 4.2);   /* 248.4m */
+  radialOut(byIdx(96), 7.5);    /* 157.7m — between a beam and a rotor */
+  radialOut(byIdx(124), 7.5);   /* 203.1m */
+  radialOut(byIdx(152), 7.5);   /* 248.4m */
   /* P1 double-jump gate: idx72 (星屑の結晶) raised one extra step, so the
      rise into it is 3.24m — beyond a single jump (2.64m landable), well
      inside a double jump (4.45m). Double jump unlocks at 25m; this is 119m. */
