@@ -193,7 +193,10 @@ renderer.useLegacyLights = false;
 document.getElementById('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0xf6cf9a, 90, 780);
+/* playtest fix (fog wash): every fog near/far the zone system asks for is
+   pushed out by this factor, so distant platforms stay readable */
+const FOG_PUSH = 1.10;
+scene.fog = new THREE.Fog(0xf6cf9a, 90 * FOG_PUSH, 780 * FOG_PUSH);
 const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 2400);
 
 /* ---------- environment lighting: soft IBL reflections (kills flatness) ---------- */
@@ -210,7 +213,7 @@ try {
   composer = new EffectComposer(renderer, rt);
   composer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   composer.addPass(new RenderPass(scene, camera));
-  bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.55, 0.6, 0.72);
+  bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.48, 0.6, 0.80);
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
 } catch (e) { composer = null; }
@@ -837,15 +840,21 @@ const updrafts = [];
 const guide = { on: true };
 const guideGroup = new THREE.Group(); scene.add(guideGroup);
 {
-  const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.9, 15, 14, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0xaee9ff, transparent: true, opacity: 0.12,
-      side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+  const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.88, 1.44, 15, 14, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xaee9ff, transparent: true, opacity: 0.42,
+      side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
   pillar.position.y = 7.5; pillar.name = 'guidePillar'; guideGroup.add(pillar);
-  const mark = new THREE.Mesh(new THREE.ConeGeometry(0.42, 1.05, 4),
-    new THREE.MeshBasicMaterial({ color: 0xffd977, transparent: true, opacity: 0.95 }));
+  const mark = new THREE.Mesh(new THREE.ConeGeometry(0.59, 1.47, 4),
+    new THREE.MeshBasicMaterial({ color: 0xffd977, transparent: true, opacity: 0.95, fog: false }));
   mark.rotation.x = Math.PI;   /* apex down: a small floating chevron */
   mark.name = 'guideMark'; guideGroup.add(mark);
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0xaee9ff, transparent: true, opacity: 0.5, depthWrite: false }));
+  const markGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0xffd977, transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+  markGlow.scale.setScalar(3.4); mark.add(markGlow);   /* halo rides with the chevron */
+  const ring = new THREE.Mesh(new THREE.RingGeometry(1.0, 1.45, 40),
+    new THREE.MeshBasicMaterial({ color: 0xaee9ff, transparent: true, opacity: 0.3,
+      side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+  ring.rotation.x = -Math.PI / 2; ring.position.y = 0.07; ring.name = 'guideRing'; guideGroup.add(ring);
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0xaee9ff, transparent: true, opacity: 0.5, depthWrite: false, fog: false }));
   glow.scale.setScalar(4.5); glow.position.y = 1.1; guideGroup.add(glow);
 }
 
@@ -1040,8 +1049,8 @@ function ribbonGeometry() {
   return g;
 }
 {
-  const skinMat = new THREE.MeshStandardMaterial({ color: 0xf4fbff, roughness: 0.22, metalness: 0.05,
-    emissive: 0x9fc8ff, emissiveIntensity: 0.24, transparent: true, opacity: 0.96 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xf2f6ff, roughness: 0.22, metalness: 0.05,
+    emissive: 0x9fc8ff, emissiveIntensity: 0.16, transparent: true, opacity: 0.96 });
   /* teardrop body via Lathe */
   const pts = [];
   pts.push(new THREE.Vector2(0.001, 0));
@@ -1055,11 +1064,11 @@ function ribbonGeometry() {
   body.castShadow = true; primVisual.add(body);
   /* glowing core */
   charCore = new THREE.Mesh(new THREE.SphereGeometry(0.20, 18, 14),
-    new THREE.MeshStandardMaterial({ color: 0xbfeaff, emissive: 0x6fd2ff, emissiveIntensity: 2.6, roughness: 0.3 }));
+    new THREE.MeshStandardMaterial({ color: 0xbfeaff, emissive: 0x6fd2ff, emissiveIntensity: 1.7, roughness: 0.3 }));
   charCore.position.set(0, 0.45, 0.30); primVisual.add(charCore);
-  const coreGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0x8fd8ff, transparent: true, opacity: 0.75, depthWrite: false }));
+  const coreGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0x8fd8ff, transparent: true, opacity: 0.55, depthWrite: false }));
   coreGlow.position.copy(charCore.position); coreGlow.scale.setScalar(1.25); primVisual.add(coreGlow);
-  const coreLight = new THREE.PointLight(0x7fd0ff, 14, 11, 1.8);
+  const coreLight = new THREE.PointLight(0x7fd0ff, 7, 11, 1.8);
   coreLight.position.set(0, 0.7, 0.4); primVisual.add(coreLight);
   /* eyes */
   const eyeMat = new THREE.MeshStandardMaterial({ color: 0x141c30, roughness: 0.15 });
@@ -1074,12 +1083,12 @@ function ribbonGeometry() {
   }
   /* ribbon fins */
   const ribGeo = ribbonGeometry();
-  const ribMat = new THREE.MeshStandardMaterial({ color: 0xa8dcff, roughness: 0.35, emissive: 0x5fb8ff, emissiveIntensity: 0.55, side: THREE.DoubleSide, transparent: true, opacity: 0.96 });
+  const ribMat = new THREE.MeshStandardMaterial({ color: 0xa8dcff, roughness: 0.35, emissive: 0x5fb8ff, emissiveIntensity: 0.4, side: THREE.DoubleSide, transparent: true, opacity: 0.96 });
   ribbonL = new THREE.Mesh(ribGeo, ribMat); ribbonL.position.set(-0.30, 1.06, -0.05); ribbonL.rotation.z = 0.55; primVisual.add(ribbonL);
   ribbonR = new THREE.Mesh(ribGeo, ribMat.clone()); ribbonR.position.set(0.30, 1.06, -0.05); ribbonR.rotation.z = -0.55; ribbonR.scale.x = -1; primVisual.add(ribbonR);
   /* back fin (grows at 25m unlock) */
   backFin = new THREE.Mesh(new THREE.ConeGeometry(0.20, 0.62, 4),
-    new THREE.MeshStandardMaterial({ color: 0x8fd8ff, roughness: 0.3, emissive: 0x4aa8ff, emissiveIntensity: 0.7, flatShading: true }));
+    new THREE.MeshStandardMaterial({ color: 0x8fd8ff, roughness: 0.3, emissive: 0x4aa8ff, emissiveIntensity: 0.5, flatShading: true }));
   backFin.position.set(0, 0.72, -0.42); backFin.rotation.x = -0.7; backFin.scale.setScalar(0.001); primVisual.add(backFin);
   /* little feet */
   const footMat = new THREE.MeshStandardMaterial({ color: 0xdff2ff, roughness: 0.5 });
@@ -1090,7 +1099,7 @@ function ribbonGeometry() {
 }
 /* halo (100m unlock) — kept at group level so it also fits a GLB visual */
 haloRing = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.045, 10, 32),
-  new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffd977, emissiveIntensity: 2.0, metalness: 0.7, roughness: 0.25 }));
+  new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffd977, emissiveIntensity: 1.5, metalness: 0.7, roughness: 0.25 }));
 haloRing.position.y = 1.62; haloRing.rotation.x = Math.PI / 2.25; haloRing.visible = false;
 playerGroup.add(haloRing);
 
@@ -1155,6 +1164,8 @@ function teleportToCheckpoint() {
 let dragging = false, lastX = 0, lastY = 0;
 let lastCamInputT = -10, moveHoldT = 0;   /* for the gentle auto-align assist */
 let camTween = null;                     /* camera reset (C / double-click) */
+let lostCharT = 0;                       /* seconds the player has been out of frame */
+const projV = new THREE.Vector3();       /* scratch for the lost-character check */
 function startCamReset() {
   if (!S.started || S.finished) return;
   let dy = (S.facing + Math.PI) - camYaw;   /* settle behind the character */
@@ -1476,7 +1487,10 @@ function loadWithTimeout(loader, url, ms = 9000) {
 {
   const loader = new GLTFLoader();
   loadWithTimeout(loader, './assets/shizuku.glb').then(gltf => {
-    gltf.scene.traverse(o => { if (o.isMesh && o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity = 0.4; });
+    gltf.scene.traverse(o => {
+      if (o.isMesh && o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity = 0.4;
+      if (o.isLight) o.intensity *= 0.5;   /* cap any GLB-baked light so the core cannot blow out */
+    });
     const holder = new THREE.Group();
     holder.add(fitToHeight(gltf.scene, 1.25));
     playerGroup.add(holder);
@@ -1577,9 +1591,11 @@ function animate() {
     if (guideGroup.visible) {
       guideGroup.position.set(tgt.g.position.x, topY(tgt), tgt.g.position.z);
       const pl = guideGroup.getObjectByName('guidePillar');
-      if (pl) pl.material.opacity = 0.10 + Math.sin(t * 2.2) * 0.04;
+      if (pl) pl.material.opacity = 0.42 + Math.sin(t * 2.2) * 0.13;   /* pulse peak 0.55, fog:false keeps it visible */
       const mk = guideGroup.getObjectByName('guideMark');
       if (mk) { mk.position.y = 3.1 + Math.sin(t * 2.2) * 0.35; mk.rotation.y = t * 1.4; }
+      const gr = guideGroup.getObjectByName('guideRing');
+      if (gr) { gr.material.opacity = 0.30 + Math.sin(t * 2.2) * 0.13; gr.scale.setScalar(1 + Math.sin(t * 2.2) * 0.07); }
     }
   }
   /* updraft shimmer (lit pillars only) */
@@ -1665,8 +1681,8 @@ function animate() {
   sun.intensity = pal.sun * rig.sunK;
   hemi.intensity = pal.hemi * rig.hemiK;
   hemi.color.lerp(rig.sky, 0.03); hemi.groundColor.lerp(rig.gnd, 0.03);
-  scene.fog.near += (rig.fogNear - scene.fog.near) * Math.min(1, dt * 1.6);
-  scene.fog.far += (rig.fogFar - scene.fog.far) * Math.min(1, dt * 1.6);
+  scene.fog.near += (rig.fogNear * FOG_PUSH - scene.fog.near) * Math.min(1, dt * 1.6);
+  scene.fog.far += (rig.fogFar * FOG_PUSH - scene.fog.far) * Math.min(1, dt * 1.6);
   starMat.opacity = THREE.MathUtils.smoothstep(prog, 0.45, 0.9) * 0.95;
   stars.position.copy(camera.position);
   const aur = THREE.MathUtils.smoothstep(prog, 0.58, 0.82);
@@ -1707,6 +1723,9 @@ function animate() {
       camYaw += THREE.MathUtils.clamp(dy, -0.5 * dt, 0.5 * dt);
     }
   }
+  /* clamp pitch where it is USED, so no writer (drag, tween, future code)
+     can ever leave the camera flipped past the sane range */
+  camPitch = THREE.MathUtils.clamp(camPitch, -0.42, 1.15);
   camTarget.lerp(new THREE.Vector3(S.pos.x, S.pos.y + 1.7, S.pos.z), 1);
   const cx = S.pos.x + Math.sin(camYaw) * Math.cos(camPitch) * camDist;
   const cz = S.pos.z + Math.cos(camYaw) * Math.cos(camPitch) * camDist;
@@ -1739,6 +1758,16 @@ function animate() {
     }
   }
   camera.lookAt(S.pos.x, S.pos.y + 1.7, S.pos.z);
+  /* lost-character safeguard: if the player stays outside the frame for
+     2.5s while the user is not dragging, recover with the smooth reset
+     (auto-align alone never fires for an idle, off-screen character) */
+  if (S.started && !S.finished && !dragging && !camTween) {
+    projV.set(S.pos.x, S.pos.y + 1.0, S.pos.z).project(camera);
+    if (Math.abs(projV.x) > 1.15 || Math.abs(projV.y) > 1.15 || projV.z > 1) {
+      lostCharT += dt;
+      if (lostCharT >= 2.5) { lostCharT = 0; startCamReset(); }
+    } else lostCharT = 0;
+  } else lostCharT = 0;
   /* HUD */
   if (S.started) {
     const h = Math.max(0, Math.floor(S.pos.y));
