@@ -1,4 +1,13 @@
-"""Shizuku v4 - teardrop spirit player character for SORAKUJIRA.
+"""Shizuku v5 - teardrop spirit player character for SORAKUJIRA.
+
+v5 material craft (design unchanged from v4 - it worked):
+- Body: subsurface scattering (translucent spirit), clearcoat sheen,
+  and a BAKED roughness grain map (fine grain + sparse sparkle) so the
+  surface is not flat plastic.
+- Fins: SSS + a slight transmission tint over the vertex-colour
+  gradient; arm fins get SSS too.
+- Core: clearcoat layer over the emissive lens (fresnel-ish sheen).
+- Eyes: transparent CORNEA domes over the layered eyes (as the whale).
 
 v4 fixes over v3 (face, gold-rimmed core and side profile kept - they
 worked; from dead front the fins still read as rabbit ears):
@@ -41,7 +50,11 @@ CHEEK_M = mat("Cheek", (1.00, 0.50, 0.62), 0.5)
 CREAM_M = mat("Cream", (1.00, 0.90, 0.76), 0.5)
 MOUTH_M = mat("Mouth", (0.05, 0.03, 0.05), 0.4)
 
-def vc_mat(name, roughness=0.38, glow=0.0):
+def _set_in(bsdf, name, val):
+    if name in bsdf.inputs:
+        bsdf.inputs[name].default_value = val
+
+def vc_mat(name, roughness=0.38, glow=0.0, sss=0.0, trans=0.0, coat=0.0):
     m = bpy.data.materials.new(name); m.use_nodes = True
     nt = m.node_tree
     vc = nt.nodes.new("ShaderNodeVertexColor"); vc.layer_name = "Col"
@@ -51,10 +64,42 @@ def vc_mat(name, roughness=0.38, glow=0.0):
     if glow > 0.0:   # faint self-glow from the same colours: bright tips
         nt.links.new(vc.outputs["Color"], bsdf.inputs["Emission Color"])
         bsdf.inputs["Emission Strength"].default_value = glow
+    if sss > 0.0:    # v5: translucent spirit flesh
+        _set_in(bsdf, "Subsurface Weight", sss)
+        _set_in(bsdf, "Subsurface Radius", (0.85, 0.92, 1.05))
+        _set_in(bsdf, "Subsurface Scale", 0.35)
+    if trans > 0.0:  # v5: slight transmission tint on the fins
+        _set_in(bsdf, "Transmission Weight", trans)
+        _set_in(bsdf, "IOR", 1.32)
+        _set_in(bsdf, "Thickness", 0.02)
+    if coat > 0.0:
+        _set_in(bsdf, "Coat Weight", coat)
+        _set_in(bsdf, "Coat Roughness", 0.22)
     return m
-BODY_VC = vc_mat("ShizukuBodyVC", roughness=0.22)
-FIN_VC = vc_mat("RibbonFinVC", glow=0.16)
-ARM_VC = vc_mat("ArmFinVC", roughness=0.4)
+BODY_VC = vc_mat("ShizukuBodyVC", roughness=0.22, sss=0.35, coat=0.30)
+FIN_VC = vc_mat("RibbonFinVC", glow=0.16, roughness=0.32, sss=0.45, trans=0.15)
+ARM_VC = vc_mat("ArmFinVC", roughness=0.4, sss=0.30)
+
+# v5: clearcoat jewel sheen over the emissive core lens
+_cb = CORE_M.node_tree.nodes["Principled BSDF"]
+_set_in(_cb, "Coat Weight", 1.0)
+_set_in(_cb, "Coat Roughness", 0.06)
+# v5: soft SSS on cheeks / feet for cohesion
+for _m in (CHEEK_M, CREAM_M):
+    _b = _m.node_tree.nodes["Principled BSDF"]
+    _set_in(_b, "Subsurface Weight", 0.25)
+    _set_in(_b, "Subsurface Radius", (0.9, 0.9, 1.0))
+
+def _cornea_mat():
+    m = bpy.data.materials.new("Cornea"); m.use_nodes = True
+    b = m.node_tree.nodes["Principled BSDF"]
+    b.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+    b.inputs["Roughness"].default_value = 0.03
+    _set_in(b, "Transmission Weight", 1.0)
+    _set_in(b, "IOR", 1.38)
+    _set_in(b, "Thickness", 0.01)
+    return m
+CORNEA_M = _cornea_mat()
 
 def finish(obj, material, smooth=True):
     if material: obj.data.materials.append(material)
@@ -104,24 +149,86 @@ def body_color(z):
         return lerp3(C_BELLY, C_MID, smooth01(z / 0.55))
     return lerp3(C_MID, C_CROWN, smooth01((z - 0.55) / 0.45))
 
-verts, faces, bcols = [], [], []
+verts, faces, bcols, buvs = [], [], [], []
 SEG = 48
-for r, z in profile:
+for j, (r, z) in enumerate(profile):
     for i in range(SEG):
         a = 2 * math.pi * i / SEG
         verts.append((r * math.cos(a), r * math.sin(a), z))
         bcols.append((*body_color(z), 1.0))
+        buvs.append((i / SEG, j / (len(profile) - 1)))
 for j in range(len(profile) - 1):
     for i in range(SEG):
         a = j * SEG + i; b = j * SEG + (i + 1) % SEG
         faces.append((a, b, b + SEG, a + SEG))
 mesh = bpy.data.meshes.new("BodyMesh"); mesh.from_pydata(verts, [], faces); mesh.update()
+_uvl = mesh.uv_layers.new(name="UVMap")
+for _poly in mesh.polygons:
+    for _li in _poly.loop_indices:
+        _uvl.data[_li].uv = buvs[mesh.loops[_li].vertex_index]
 ca = mesh.color_attributes.new(name="Col", type='FLOAT_COLOR', domain='POINT')
 for i, c in enumerate(bcols): ca.data[i].color = c
 mesh.color_attributes.active = ca
 body = bpy.data.objects.new("Body", mesh); bpy.context.collection.objects.link(body)
 finish(body, BODY_VC)
 sub = body.modifiers.new("Subsurf", "SUBSURF"); sub.levels = 1; sub.render_levels = 1
+
+# ---- v5: bake a fine roughness grain (+ sparse sparkle) for the body --
+def _body_rough_bake():
+    img = bpy.data.images.new("BodyRoughTex", 1024, 1024, alpha=False)
+    tm = bpy.data.materials.new("BodyRoughBake"); tm.use_nodes = True
+    nt = tm.node_tree; nt.nodes.clear()
+    outn = nt.nodes.new("ShaderNodeOutputMaterial")
+    bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
+    nt.links.new(bsdf.outputs[0], outn.inputs["Surface"])
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    nz = nt.nodes.new("ShaderNodeTexNoise")
+    nz.inputs["Scale"].default_value = 55.0; nz.inputs["Detail"].default_value = 3.0
+    nt.links.new(tc.outputs["Object"], nz.inputs["Vector"])
+    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].color = (0.15, 0.15, 0.15, 1.0)
+    ramp.color_ramp.elements[1].color = (0.30, 0.30, 0.30, 1.0)
+    nt.links.new(nz.outputs["Fac"], ramp.inputs["Fac"])
+    bw = nt.nodes.new("ShaderNodeRGBToBW")
+    nt.links.new(ramp.outputs["Color"], bw.inputs["Color"])
+    vr = nt.nodes.new("ShaderNodeTexVoronoi")
+    vr.inputs["Scale"].default_value = 90.0; vr.inputs["Randomness"].default_value = 1.0
+    nt.links.new(tc.outputs["Object"], vr.inputs["Vector"])
+    mr = nt.nodes.new("ShaderNodeMapRange")
+    for _nm, _vv in (("From Min", 0.0), ("From Max", 0.08), ("To Min", 0.35), ("To Max", 0.0)):
+        mr.inputs[_nm].default_value = _vv
+    mr.clamp = True
+    nt.links.new(vr.outputs["Distance"], mr.inputs["Value"])
+    add = nt.nodes.new("ShaderNodeMath"); add.operation = 'ADD'
+    nt.links.new(bw.outputs["Val"], add.inputs[0])
+    nt.links.new(mr.outputs["Result"], add.inputs[1])
+    cap = nt.nodes.new("ShaderNodeMath"); cap.operation = 'MINIMUM'
+    cap.inputs[1].default_value = 0.60
+    nt.links.new(add.outputs[0], cap.inputs[0])
+    comb = nt.nodes.new("ShaderNodeCombineXYZ")
+    for _ax in ("X", "Y", "Z"):
+        nt.links.new(cap.outputs[0], comb.inputs[_ax])
+    nt.links.new(comb.outputs["Vector"], bsdf.inputs["Emission Color"])
+    saved = list(body.data.materials)
+    body.data.materials.clear(); body.data.materials.append(tm)
+    bpy.context.view_layer.objects.active = body; body.select_set(True)
+    scn = bpy.context.scene
+    scn.render.engine = 'CYCLES'; scn.cycles.samples = 4
+    tn = nt.nodes.new("ShaderNodeTexImage"); tn.image = img
+    for n in nt.nodes: n.select = False
+    tn.select = True; nt.nodes.active = tn
+    bpy.ops.object.bake(type='EMIT', margin=8)
+    nt.nodes.remove(tn)
+    body.data.materials.clear()
+    for m_ in saved: body.data.materials.append(m_)
+    img.pack()   # pack BEFORE colorspace (quirk)
+    img.colorspace_settings.name = 'Non-Color'
+    bnt = BODY_VC.node_tree
+    txi = bnt.nodes.new("ShaderNodeTexImage"); txi.image = img
+    bnt.links.new(txi.outputs["Color"],
+                  bnt.nodes["Principled BSDF"].inputs["Roughness"])
+    print("BODY ROUGH BAKED, packed:", img.packed_file is not None)
+_body_rough_bake()
 
 # ---- lofted ribbon builder (centers, widths, side dirs, vertex colours) ----
 def ribbon(name, centers, widths, sides, c0, c1, thick, material):
@@ -196,6 +303,8 @@ for s, nm in ((1, "R"), (-1, "L")):
     sphere(f"Pupil{nm}", (x, -0.440, 0.745), (0.017, 0.009, 0.026), PUPIL_M)
     sphere(f"HL{nm}", (x - 0.017 * s, -0.440, 0.775), (0.015, 0.008, 0.022), HL_M)
     sphere(f"Cheek{nm}", (0.30 * s, -0.360, 0.600), (0.078, 0.042, 0.058), CHEEK_M)
+    # v5: transparent cornea dome over the layered eye (wet highlight)
+    sphere(f"Cornea{nm}", (x, -0.406, 0.742), (0.060, 0.044, 0.088), CORNEA_M)
 # smile: shallow U arc on the body surface, clear space above the core
 mpts = []
 for k in range(9):
@@ -258,4 +367,4 @@ print("EVALUATED POLYGONS:", tot)
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(OUT, "shizuku.blend"))
 bpy.ops.export_scene.gltf(filepath=os.path.join(OUT, "shizuku.glb"),
                           export_format="GLB", export_apply=True)
-print("SHIZUKU V4 DONE")
+print("SHIZUKU V5 DONE")
