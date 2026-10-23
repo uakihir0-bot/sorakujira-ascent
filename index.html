@@ -494,8 +494,50 @@ const curSunOff = new THREE.Vector3(-42, 66, -30);
 
 /* ---------- cloud sea ---------- */
 const cloudGroup = new THREE.Group(); scene.add(cloudGroup);
+/* soft blotch map so cloud tops stop reading as one flat near-white slab:
+   near-neutral luminance patches (warm highs, lavender-gray lows) drawn
+   wrap-safe, so the pattern tiles around each blob without a seam */
+function cloudTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#dfdde6'; g.fillRect(0, 0, 256, 256);
+  const blotch = (x, y, r, style) => {          // draw 4x for horizontal wrap
+    g.fillStyle = style;
+    for (const ox of [-256, 0, 256]) for (const oy of [-256, 0, 256]) {
+      g.beginPath(); g.arc(x + ox, y + oy, r, 0, 7); g.fill();
+    }
+  };
+  for (let i = 0; i < 22; i++) {                 // broad warm highs
+    blotch(Math.random() * 256, Math.random() * 256, 22 + Math.random() * 48,
+      `rgba(246,238,224,${0.10 + Math.random() * 0.14})`);
+  }
+  for (let i = 0; i < 26; i++) {                 // lavender-gray lows
+    blotch(Math.random() * 256, Math.random() * 256, 18 + Math.random() * 44,
+      `rgba(156,162,198,${0.10 + Math.random() * 0.16})`);
+  }
+  for (let i = 0; i < 900; i++) {                // fine grain to break banding
+    const v = Math.random();
+    g.fillStyle = v < 0.5 ? `rgba(140,146,178,${0.05 + Math.random() * 0.09})` : `rgba(250,246,238,${0.05 + Math.random() * 0.09})`;
+    g.fillRect(Math.random() * 256, Math.random() * 256, 1 + Math.random() * 2, 1 + Math.random() * 2);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
 const cloudGeo = new THREE.SphereGeometry(1, 18, 12);
-const cloudMat = new THREE.MeshStandardMaterial({ color: 0xc9cbe0, roughness: 1, transparent: true, opacity: 0.66, emissive: 0x4a5578, emissiveIntensity: 0.06 });
+{ /* vertex colors: warm-gray lit tops melting into lavender-gray-blue
+     undersides, so each blob carries its own shading against the horizon */
+  const pos = cloudGeo.attributes.position, cols = [];
+  const top = [1.0, 0.965, 0.905], bot = [0.60, 0.65, 0.92];
+  for (let i = 0; i < pos.count; i++) {
+    let t = pos.getY(i) * 0.5 + 0.5;
+    t = t * t * (3 - 2 * t);
+    cols.push(top[0] + (bot[0] - top[0]) * (1 - t), top[1] + (bot[1] - top[1]) * (1 - t), top[2] + (bot[2] - top[2]) * (1 - t));
+  }
+  cloudGeo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+}
+const cloudMat = new THREE.MeshStandardMaterial({ map: cloudTexture(), vertexColors: true, color: 0xd6d4e4, roughness: 1, transparent: true, opacity: 0.66, emissive: 0x4a5578, emissiveIntensity: 0.06 });
 const clouds = [];
 for (let i = 0; i < 72; i++) {
   const m = new THREE.Mesh(cloudGeo, cloudMat);
@@ -508,24 +550,40 @@ for (let i = 0; i < 72; i++) {
 }
 
 /* ---------- cloud sea v2: soft sprite puffs layered over the blob sea ---------- */
-function puffTexture() {
+function puffTexture(variant) {
   const c = document.createElement('canvas'); c.width = c.height = 256;
   const g = c.getContext('2d');
+  /* per-variant layout shift so the sea is not one puff stamped 120 times */
+  const jx = ((variant * 47) % 31) - 15, jy = ((variant * 29) % 21) - 10;
   const blobs = [[128, 142, 98], [78, 152, 64], [180, 150, 68], [106, 116, 60], [154, 118, 54], [128, 162, 78]];
-  for (const [x, y, r] of blobs) {
+  for (const [bx, by, r] of blobs) {
+    const x = bx + jx * (r > 70 ? 0.4 : 1), y = by + jy;
+    /* internal shading: upper mass warm-gray, lower mass lavender shadow —
+       peaks also toned down (~12%) so puffs stop blowing out to pure white */
+    const warm = by < 150;
     const gr = g.createRadialGradient(x, y, 2, x, y, r);
-    gr.addColorStop(0, 'rgba(255,255,255,0.50)');
-    gr.addColorStop(0.55, 'rgba(255,255,255,0.24)');
+    gr.addColorStop(0, warm ? 'rgba(242,237,228,0.44)' : 'rgba(174,179,212,0.42)');
+    gr.addColorStop(0.55, warm ? 'rgba(238,233,224,0.20)' : 'rgba(166,171,204,0.19)');
     gr.addColorStop(1, 'rgba(255,255,255,0)');
     g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
   }
-  return new THREE.CanvasTexture(c);
+  /* underside wash: lavender-gray-blue settling into the puff's lower half
+     (source-atop: tints only inside the puff silhouette, adds no new alpha) */
+  const sh = g.createLinearGradient(0, 118, 0, 256);
+  sh.addColorStop(0, 'rgba(148,154,196,0)');
+  sh.addColorStop(1, 'rgba(148,154,196,0.38)');
+  g.globalCompositeOperation = 'source-atop';
+  g.fillStyle = sh; g.fillRect(0, 118, 256, 138);
+  g.globalCompositeOperation = 'source-over';
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }
-const puffTex = puffTexture();
+const puffTex = [puffTexture(0), puffTexture(1), puffTexture(2)];
 const spriteCloudMats = [];
 for (let i = 0; i < 5; i++) {
-  spriteCloudMats.push(new THREE.SpriteMaterial({ map: puffTex, transparent: true, depthWrite: false,
-    opacity: 0.27 + i * 0.07, color: 0xd9d4ee, fog: true }));
+  spriteCloudMats.push(new THREE.SpriteMaterial({ map: puffTex[i % puffTex.length], transparent: true, depthWrite: false,
+    opacity: 0.27 + i * 0.07, color: 0xd2cbe4, fog: true }));
 }
 const spriteClouds = [];
 for (let i = 0; i < 120; i++) {
@@ -1240,8 +1298,21 @@ for (const w of windColumns) {
 const guide = { on: true };
 const guideGroup = new THREE.Group(); scene.add(guideGroup);
 {
-  const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.88, 1.44, 15, 14, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0xaee9ff, transparent: true, opacity: 0.32,
+  /* a shaft of light, not a white pole: vertical gradient in the map —
+     full brightness at the base dissolving upward (additive blending adds
+     nothing where the map is dark), core narrowed and dimmed ~30% */
+  const gc = document.createElement('canvas'); gc.width = 4; gc.height = 256;
+  const gg = gc.getContext('2d');
+  const grad = gg.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0, '#10161f');      /* canvas top = cylinder top (flipY) */
+  grad.addColorStop(0.45, '#3d5a74');
+  grad.addColorStop(0.8, '#a8c8de');
+  grad.addColorStop(1, '#ffffff');      /* base: full brightness */
+  gg.fillStyle = grad; gg.fillRect(0, 0, 4, 256);
+  const shaftTex = new THREE.CanvasTexture(gc);
+  shaftTex.colorSpace = THREE.SRGBColorSpace;
+  const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.68, 1.15, 15, 14, 1, true),
+    new THREE.MeshBasicMaterial({ map: shaftTex, color: 0xaee9ff, transparent: true, opacity: 0.22,
       side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
   pillar.position.y = 7.5; pillar.name = 'guidePillar'; guideGroup.add(pillar);
   const mark = new THREE.Mesh(new THREE.ConeGeometry(0.59, 1.47, 4),
@@ -2026,7 +2097,7 @@ function animate() {
     if (guideGroup.visible) {
       guideGroup.position.set(tgt.g.position.x, topY(tgt), tgt.g.position.z);
       const pl = guideGroup.getObjectByName('guidePillar');
-      if (pl) pl.material.opacity = 0.32 + Math.sin(t * 2.2) * 0.10;   /* pulse peak 0.42 — dimmer than before, but the darkened sky/fog makes it read clearer */
+      if (pl) pl.material.opacity = 0.22 + Math.sin(t * 2.2) * 0.07;   /* pulse peak 0.29 — softened core (was 0.32±0.10); the gradient map keeps it a light shaft, ring/chevron carry the signal */
       const mk = guideGroup.getObjectByName('guideMark');
       if (mk) { mk.position.y = 3.1 + Math.sin(t * 2.2) * 0.35; mk.rotation.y = t * 1.4; }
       const gr = guideGroup.getObjectByName('guideRing');
