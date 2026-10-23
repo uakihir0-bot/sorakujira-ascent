@@ -655,13 +655,13 @@ function zoneMat(zone, kind) {
   sharedMats[key] = m; return m;
 }
 const rimGeo = new THREE.TorusGeometry(1, 0.045, 8, 40);
-function makePlatformMesh(zone, r, beam) {
+function makePlatformMesh(zone, r, beam, beamWid = 0.425) {
   const g = new THREE.Group();
   const z = ZONES[zone];
   let body, hx = r, hz = r, isBox = false;
   if (beam) {
     body = new THREE.Mesh(platGeoBox, zoneMat(zone, 'b'));
-    body.scale.set(r * 2, 1, 0.85); hx = r; hz = 0.43; isBox = true;
+    body.scale.set(r * 2, 1, beamWid * 2); hx = r; hz = beamWid; isBox = true;
   } else if (zone === 0) {
     body = new THREE.Mesh(platGeoCyl, zoneMat(zone, 'c')); body.scale.set(r, 1, r);
     const petal = new THREE.Mesh(platGeoCyl, new THREE.MeshStandardMaterial({ color: z.acc, roughness: 0.7, emissive: z.acc, emissiveIntensity: 0.15 }));
@@ -698,16 +698,27 @@ function makePlatformMesh(zone, r, beam) {
 }
 function addPlatform(pos, r, opts = {}) {
   const zone = zoneOf(pos.y);
-  const { g, hx, hz, isBox } = makePlatformMesh(zone, r, opts.beam);
+  const { g, hx, hz, isBox } = makePlatformMesh(zone, r, opts.beam, opts.beamWid);
   g.position.copy(pos);
-  if (isBox) g.rotation.y = -pathAngle(pos.y) + Math.PI / 2;
+  if (isBox) g.rotation.y = opts.yaw !== undefined ? opts.yaw : -pathAngle(pos.y) + Math.PI / 2;
   scene.add(g);
+  if (opts.kind === 'bounce') {   // springy cloud pad: soft white puffs over the base disc
+    const puffMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, emissive: 0xaac4e8, emissiveIntensity: 0.18 });
+    const puffGeo = new THREE.SphereGeometry(1, 14, 10);
+    for (const [ox, oz, s] of [[0, 0, 1.15], [-0.45, 0.2, 0.8], [0.48, -0.15, 0.85], [0.1, 0.45, 0.7]]) {
+      const m = new THREE.Mesh(puffGeo, puffMat);
+      m.position.set(ox * r, 0.04, oz * r);
+      m.scale.set(s * r * 0.62, s * r * 0.14, s * r * 0.62);
+      m.castShadow = true; g.add(m);
+    }
+  }
   const p = {
     g, r, hx, hz, isBox, top: 0.21, base: pos.clone(), zone,
     kind: opts.kind || 'static',
     moveAmp: opts.moveAmp || 0, moveSpeed: opts.moveSpeed || 0, phase: Math.random() * 9,
-    moveDir: new THREE.Vector3(-Math.sin(pathAngle(pos.y)), 0, Math.cos(pathAngle(pos.y))),
+    moveDir: opts.moveDir ? opts.moveDir.clone() : new THREE.Vector3(-Math.sin(pathAngle(pos.y)), 0, Math.cos(pathAngle(pos.y))),
     rotSpeed: opts.rotSpeed || 0, delta: new THREE.Vector3(), prev: pos.clone(),
+    bounceV: opts.bounceV || 0,
     crumbleState: 0, crumbleT: 0, standT: 0,
     checkpoint: !!opts.checkpoint, crystalAnchor: null
   };
@@ -718,84 +729,357 @@ function addPlatform(pos, r, opts = {}) {
   platforms.push(p);
   return p;
 }
-/* the ascending path */
-const STEP = 1.62;
-let seed = 7; const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-const checkpointYs = [0, 30, 65, 100, 135, 180, 225];
-const checkpointPlats = [];
-{
-  let idx = 0;
-  for (let y = 2.2; y <= GOAL_Y; y += STEP, idx++) {
-    const zone = zoneOf(y);
-    const jit = (rand() - 0.5) * 1.5;
-    const pos = pathPoint(y, jit);
-    pos.y = y;
-    // checkpoint: first platform at/above each zone start
-    const isCp = checkpointYs.some(cy => y >= cy && y - STEP < cy && cy > 0) || idx === 0;
-    let kind = 'static', r = 2.15 - Math.min(0.55, y / GOAL_Y * 0.55) + rand() * 0.25;
-    const opts = { checkpoint: isCp };
-    if (isCp) { r = 3.0; }
-    else if (idx % 13 === 6 && zone >= 1) { kind = 'rotate'; opts.rotSpeed = 0.35 + rand() * 0.3; }
-    else if (idx % 11 === 5 && zone >= 1) { kind = 'crumble'; }
-    else if (idx % 9 === 4) { kind = 'move'; opts.moveAmp = 1.5 + rand() * 1.1; opts.moveSpeed = 0.8 + rand() * 0.35; }
-    else if (idx % 8 === 7 && zone >= 3) { opts.beam = true; r = 2.5; }
-    opts.kind = kind;
-    const p = addPlatform(pos, r, opts);
-    if (isCp) checkpointPlats.push(p);
-    if (y > GOAL_Y - STEP * 1.5) { p.checkpoint = true; if (!checkpointPlats.includes(p)) checkpointPlats.push(p); summitPlat = p; }
-  }
-}
-var summitPlat = platforms[platforms.length - 1];
+/* ================================================================
+   ROUTE v2 — a composed sequence of traversal motifs instead of the
+   old uniform spiral: zigzags, rotating beam crossings, ferry rides,
+   glide updraft shafts, crumble gauntlets, whale-back runs, balance
+   beams, bounce clouds, ability gates and optional detours.
+   The builder block below is PURE DATA (no THREE / DOM): the audit
+   script playtest/audit_route2.mjs extracts it verbatim and replays
+   it, so keep it dependency-free. All randomness flows through one
+   seeded LCG, consumed in a fixed order.
+   ================================================================ */
+/* ROUTE-BUILDER-BEGIN */
+const ROUTE_DATA = (() => {
+  let seed = 7;
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const rr = (a, b) => a + rand() * (b - a);
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+  const GOAL = 260;
+  const helixR = y => 15 - 5 * (y / GOAL);
+  const helixA = y => y * 0.230;
+  const ZENDS = [30, 65, 100, 135, 180, 225, 1e9];
+  const zoneOfY = y => ZENDS.findIndex(t => y < t);
 
-/* ---------- playability audit fixes (post-generation pass) ----------
-   Applied AFTER the generation loop so the LCG rand() sequence — and
-   therefore every platform's rolled parameters — is completely untouched. */
-{
-  const byIdx = i => platforms[i];
-  /* P0: the first rise was 2.41m vs a 2.36m jump apex (the hardest vertical
-     in the game, held up only by the landing window). Lower idx0 to y=1.8
-     so the first rise is 2.01m and the step out of it is a normal 2.02m. */
-  const p0 = byIdx(0);
-  p0.base.y = 1.8; p0.g.position.y = 1.8; p0.prev.y = 1.8;
-  /* P0: the two summit platforms must be static (idx159 rolled 'crumble'). */
-  for (const i of [158, 159]) { const p = byIdx(i); p.kind = 'static'; p.crumbleState = 0; }
-  /* P1 ability gates: platforms pushed radially outward (+7.5m) so the
-     entry gap exceeds the base jump's flat reach (audit3: entries land at
-     4.50–5.14m vs base reach 4.34m, radii already subtracted) and can only
-     be crossed with the double jump / air dash (both unlocked far below;
-     glide and boots are also available up here). Gate exits are likewise
-     ability jumps (4.87–5.59m), so the ledge beyond is earned ground. */
-  const radialOut = (p, d) => {
-    const a = pathAngle(p.base.y);
-    p.base.x += Math.cos(a) * d; p.base.z += Math.sin(a) * d;
-    p.g.position.copy(p.base); p.prev.copy(p.base);
-  };
-  radialOut(byIdx(96), 7.5);    /* 157.7m — between a beam and a rotor */
-  radialOut(byIdx(124), 7.5);   /* 203.1m */
-  radialOut(byIdx(152), 7.5);   /* 248.4m */
-  /* P1 double-jump gate: idx72 (星屑の結晶) raised one extra step, so the
-     rise into it is 3.24m — beyond a single jump (2.64m landable), well
-     inside a double jump (4.45m). Double jump unlocks at 25m; this is 119m. */
-  const p72 = byIdx(72);
-  p72.base.y += STEP; p72.g.position.y += STEP; p72.prev.y += STEP;
-  /* P1: give the thinnest zone (星屑の結晶) its missing crumble platforms.
-     Materials are cloned exactly as addPlatform() does for natural crumbles,
-     so the fade touches only these two platforms. */
-  for (const i of [66, 77]) {
-    const p = byIdx(i); p.kind = 'crumble';
-    p.g.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); } });
+  const main = [], detours = [], shardSpecs = [], landmarks = [], winds = [];
+  /* walker state, polar coordinates around the world axis */
+  const W = { ang: 0.30, rad: 15.0, y: 0 };
+  let prevPos = { x: 15.5, y: 0, z: 0 };            // start ground centre
+  let dirSign = 1;                                  // overall angular direction of the climb
+  const wPos = () => ({ x: Math.cos(W.ang) * W.rad, y: W.y, z: Math.sin(W.ang) * W.rad });
+  function yawFor(a, b) {                           // box yaw: local +x along travel a->b
+    const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz) || 1;
+    return Math.atan2(-(dz / d), dx / d);
   }
-  /* guide support: remember each platform's index, and make the first
-     three platforms glow gold so the route reads from the very start */
-  platforms.forEach((p, i) => { p.pIdx = i; });
-  for (const i of [0, 1, 2]) {
-    byIdx(i).g.traverse(o => {
-      if (o.isMesh) {
-        o.material = o.material.clone();
-        if ('emissiveIntensity' in o.material) { o.material.emissive = new THREE.Color(0xffc766); o.material.emissiveIntensity = 0.5; }
-      }
-    });
+  function emit(spec) {
+    const p = Object.assign({ x: 0, y: 0, z: 0, r: 2.0, kind: 'static', motif: 'flow' }, spec);
+    if (p.beam) p.yaw = yawFor(prevPos, p);
+    main.push(p); prevPos = { x: p.x, y: p.y, z: p.z };
+    return p;
   }
+  function stepEmit(dang, drad, dy, opts = {}) {
+    W.ang += dang; W.rad = clamp(W.rad + drad, 8.6, 24); W.y += dy;
+    if (W.rad > 19) W.rad -= (W.rad - 19) * 0.3;    // long straight rides drift out; ease back in
+    const c = wPos();
+    return emit(Object.assign({ x: c.x, y: W.y, z: c.z }, opts));
+  }
+  function syncWalker(p) {
+    W.ang = Math.atan2(p.z, p.x); W.rad = Math.hypot(p.x, p.z); W.y = p.y;
+    prevPos = { x: p.x, y: p.y, z: p.z };
+  }
+  function tangentAt(p, sign) { const a = Math.atan2(p.z, p.x); return { x: -Math.sin(a) * sign, z: Math.cos(a) * sign }; }
+  function radialAt(p) { const d = Math.hypot(p.x, p.z) || 1; return { x: p.x / d, z: p.z / d }; }
+
+  /* ---------- motifs ---------- */
+  function flow(n, o = {}) { for (let i = 0; i < n; i++) stepEmit(dirSign * rr(0.24, 0.34), rr(-0.8, 0.8), o.dy || 1.62, { r: rr(1.95, 2.2), motif: 'flow' }); }
+  function flowUntil(yT, o = {}) { while (W.y < yT) flow(1, o); }
+  function zigzagUntil(yT) {
+    let s = rand() < 0.5 ? -1 : 1;
+    while (W.y < yT) { s = -s; stepEmit(dirSign * rr(0.13, 0.20), s * rr(2.6, 3.6), rr(1.25, 1.58), { r: rr(1.65, 1.9), motif: 'zigzag' }); }
+  }
+  function stackUntil(yT) {
+    let s = rand() < 0.5 ? -1 : 1;
+    while (W.y < yT) { s = -s; stepEmit(dirSign * rr(0.12, 0.17), s * rr(1.6, 2.2), 1.62, { r: rr(1.85, 2.05), motif: 'stack' }); }
+  }
+  function whaleBackUntil(yT, dyStep) {
+    /* bridge from wherever the walker is onto the whale's back line */
+    const fy = W.y + dyStep;
+    const fp = { x: Math.cos(helixA(fy)) * (helixR(fy) - 4.4), y: fy, z: Math.sin(helixA(fy)) * (helixR(fy) - 4.4) };
+    const cur = main.length ? main[main.length - 1] : { x: 15.5, y: 0, z: 0 };
+    const d = Math.hypot(fp.x - cur.x, fp.z - cur.z);
+    if (d > 11) emit({ x: cur.x + (fp.x - cur.x) / 3, y: cur.y + (fp.y - cur.y) / 3, z: cur.z + (fp.z - cur.z) / 3, r: 2.1, motif: 'flow' });
+    if (d > 6) emit({ x: cur.x + (fp.x - cur.x) * 2 / 3, y: cur.y + (fp.y - cur.y) * 2 / 3, z: cur.z + (fp.z - cur.z) * 2 / 3, r: 2.1, motif: 'flow' });
+    while (W.y < yT) {
+      W.y += dyStep; const y = W.y;
+      emit({ x: Math.cos(helixA(y)) * (helixR(y) - 4.4), y, z: Math.sin(helixA(y)) * (helixR(y) - 4.4), r: rr(2.0, 2.2), motif: 'whaleback' });
+    }
+    syncWalker(main[main.length - 1]);
+  }
+  function exitWhale() { stepEmit(dirSign * rr(0.26, 0.34), 3.4, 1.45, { r: 2.1, motif: 'flow' }); }
+  function crumbleRun(n) {
+    stepEmit(dirSign * 0.22, rr(-1, 1), 1.3, { r: 2.4, motif: 'rest' });
+    let s = rand() < 0.5 ? -1 : 1;
+    for (let i = 0; i < n; i++) { s = -s; stepEmit(dirSign * rr(0.30, 0.37), s * rr(1.0, 1.6), rr(1.15, 1.4), { r: rr(1.7, 1.9), kind: 'crumble', motif: 'crumble' }); }
+    stepEmit(dirSign * 0.22, rr(-1, 1), 1.3, { r: 2.4, motif: 'rest' });
+  }
+  function beamCross() {                            // long beam rotating about its hub
+    stepEmit(dirSign * 0.30, rr(-0.6, 0.6), 1.3, { r: 2.1, motif: 'beam-in' });
+    stepEmit(dirSign * 0.33, 0, 1.25, { r: 3.6, kind: 'rotate', beam: true, beamWid: 0.55, rotSpeed: rr(0.28, 0.36), motif: 'beamcross' });
+    stepEmit(dirSign * 0.33, rr(-0.6, 0.6), 1.25, { r: 2.1, motif: 'beam-out' });
+  }
+  function balanceBeam() {                          // 0.5m-wide beam between safe platforms
+    stepEmit(dirSign * 0.24, rr(-0.5, 0.5), 1.2, { r: 2.2, motif: 'beam-in' });
+    const b = stepEmit(dirSign * rr(0.42, 0.48), 0, 0.9, { r: 3.5, beam: true, beamWid: 0.25, motif: 'balance' });
+    stepEmit(dirSign * rr(0.42, 0.48), rr(-0.5, 0.5), 1.2, { r: 2.2, motif: 'beam-out' });
+    return b;
+  }
+  function ferry(span) {                            // long ride across open sky (sinusoidal, worst wait PI/0.8 = 3.9s)
+    const entry = stepEmit(dirSign * 0.26, rr(-0.6, 0.6), 1.2, { r: 2.2, motif: 'ferry-in' });
+    const dir = tangentAt(entry, dirSign);
+    const near = { x: entry.x + dir.x * 5.3, y: entry.y, z: entry.z + dir.z * 5.3 };
+    const base = { x: near.x + dir.x * (span / 2), y: entry.y, z: near.z + dir.z * (span / 2) };
+    emit({ x: base.x, y: base.y, z: base.z, r: 2.2, kind: 'move', motif: 'ferry',
+      moveAmp: span / 2, moveSpeed: 0.8, moveDir: { x: dir.x, z: dir.z } });
+    const far = { x: base.x + dir.x * (span / 2), y: entry.y, z: base.z + dir.z * (span / 2) };
+    const exit = emit({ x: far.x + dir.x * 5.3, y: entry.y + 1.35, z: far.z + dir.z * 5.3, r: 2.2, motif: 'ferry-out' });
+    syncWalker(exit);
+  }
+  function bounce(rise) {                           // springy cloud pad -> high ledge
+    const pad = stepEmit(dirSign * 0.18, rr(-0.8, 0.8), 0.8, { r: 2.0, kind: 'bounce', motif: 'bounce' });
+    pad.bounceV = Math.round(Math.sqrt(2 * 22 * (rise + 0.85)) * 10) / 10;
+    stepEmit(dirSign * 0.15, rr(-0.8, 0.8), rise - 0.8, { r: 2.2, motif: 'bounce-top' });
+  }
+  function shaft(rise) {                            // glide updraft column (needs 滑空, 75m)
+    const entry = stepEmit(dirSign * 0.2, rr(-0.5, 0.5), 1.2, { r: 2.3, motif: 'shaft-in' });
+    const tan = tangentAt(entry, dirSign);
+    const wi = winds.length;
+    winds.push({ x: entry.x + tan.x * 1.0, z: entry.z + tan.z * 1.0, y0: entry.y + 0.4, y1: entry.y + rise + 1.2, r: 2.7 });
+    entry.wind = wi;
+    const exit = emit({ x: entry.x + tan.x * 6.6, y: entry.y + rise, z: entry.z + tan.z * 6.6, r: 2.3, motif: 'shaft-top' });
+    exit.wind = wi;
+    syncWalker(exit);
+  }
+  function gapJump(G, dy, opts = {}) {              // explicit edge-gap leap along travel
+    const a = main[main.length - 1];
+    const tan = tangentAt(a, dirSign);
+    const rB = opts.r || 2.0;
+    const dist = G + (a.r + 0.32) + (rB + 0.32);
+    const p = emit({ x: a.x + tan.x * dist, y: a.y + dy, z: a.z + tan.z * dist, r: rB, motif: opts.motif || 'gap' });
+    syncWalker(p);
+    return p;
+  }
+  function riseGate(dy, motif) { return stepEmit(dirSign * 0.15, rr(-0.4, 0.4), dy, { r: 2.1, motif }); }
+  function finishClimb() {
+    while (GOAL - W.y > 3.3) flow(1);
+    let rem = GOAL - W.y;
+    if (rem > 1.7) { stepEmit(dirSign * 0.28, rr(-0.5, 0.5), rem / 2, { r: 2.1, motif: 'flow' }); rem = GOAL - W.y; }
+    const last = stepEmit(dirSign * 0.28, rr(-0.5, 0.5), rem, { r: 3.2, motif: 'summit' });
+    last.y = GOAL;
+  }
+
+  /* ---------- the composed route ---------- */
+  /* Z0 珊瑚の尾 0–30 */
+  stepEmit(0.30, -0.2, 1.8, { r: 2.1, motif: 'flow' });          // first platform: 2.01m rise from the ground
+  flowUntil(6.5);
+  zigzagUntil(13);
+  whaleBackUntil(20.5, 1.25);
+  exitWhale();
+  balanceBeam();
+  flowUntil(30.5);
+  /* Z1 鱗の海原 30–65 */
+  zigzagUntil(38);
+  riseGate(3.3, 'gate-double');                                  // needs 二段跳び (25m)
+  flow(1);
+  ferry(12);
+  crumbleRun(4);
+  stackUntil(58);
+  flowUntil(65.5);
+  /* Z2 骨帆の夕 65–100 — the climb reverses direction here */
+  dirSign = -1;
+  zigzagUntil(72);
+  gapJump(11.3, 0.2, { motif: 'gate-dash' });                    // needs 風ダッシュ (50m)
+  beamCross();
+  flowUntil(82);
+  shaft(11);                                                     // glide shaft #1
+  gapJump(23, -7, { motif: 'gate-glide', r: 2.3 });              // needs 滑空 (75m)
+  bounce(6.5);
+  flowUntil(100.5);
+  /* Z3 星屑の結晶 100–135 */
+  stackUntil(108);
+  beamCross();
+  crumbleRun(5);
+  zigzagUntil(126.5);
+  ferry(14);
+  gapJump(8.6, 1.2, { motif: 'gate-combo' });
+  flowUntil(135.5);
+  /* Z4 雲の墓地 135–180 */
+  dirSign = 1;
+  whaleBackUntil(146, 1.3);
+  exitWhale();
+  flowUntil(150);
+  riseGate(4.9, 'gate-boots');                                   // needs 星屑ブーツ+二段 (130m)
+  balanceBeam();
+  shaft(12);                                                     // glide shaft #2
+  bounce(6.5);
+  flowUntil(180.5);
+  /* Z5 オーロラ海 180–225 */
+  zigzagUntil(189);
+  gapJump(23.5, -13, { motif: 'gate-ddash', r: 2.2 });           // double-dash showcase (175m)
+  bounce(7.2);
+  ferry(16);
+  flowUntil(196);
+  shaft(12);                                                     // glide shaft #3
+  gapJump(13, -5, { motif: 'glide', r: 2.3 });                   // spectacle descent
+  bounce(7.2);
+  zigzagUntil(219);
+  flowUntil(225.5);
+  /* Z6 月冠 225–260 */
+  dirSign = -1;
+  flowUntil(233);
+  crumbleRun(4);
+  zigzagUntil(247);
+  whaleBackUntil(254.5, 1.3);
+  finishClimb();
+
+  /* ---------- checkpoints: first static platform at/above each zone start ---------- */
+  main[0].checkpoint = true;
+  for (const cy of [30, 65, 100, 135, 180, 225]) {
+    let i = main.findIndex(p => p.y >= cy);
+    while (i >= 0 && i < main.length && main[i].kind !== 'static') i++;
+    if (i >= 0 && i < main.length) { main[i].checkpoint = true; if (main[i].r < 3.0) main[i].r = 3.0; }
+  }
+  const summit = main[main.length - 1];
+  summit.checkpoint = true; summit.kind = 'static';
+
+  /* ---------- optional detours: chains offset parallel to the main
+     route, so every hop mirrors a proven main-route step; each chain
+     rejoins at the nearest higher main platform to its last point --- */
+  const idxAt = (yMin, pred) => main.findIndex(p => p.y >= yMin && (!pred || pred(p)));
+  function offPt(p, out, tan, dy, extra = {}) {
+    const o = radialAt(p), t = tangentAt(p, 1);
+    return Object.assign({ x: p.x + o.x * out + t.x * tan, y: p.y + dy, z: p.z + o.z * out + t.z * tan, r: 1.9, kind: 'static', motif: 'detour' }, extra);
+  }
+  function regDetour(branchIdx, pts, minDy) {
+    const last = pts[pts.length - 1];
+    let rejoin = -1, bd = 1e9;
+    for (let i = branchIdx + 1; i < main.length; i++) {
+      if (main[i].y < main[branchIdx].y + minDy) continue;   // must rejoin higher than the branch
+      if (main[i].y > last.y + 6) continue;                  // ...but in this neighbourhood, not a spiral lap later
+      const d = Math.hypot(main[i].x - last.x, main[i].z - last.z);
+      if (d < bd) { bd = d; rejoin = i; }
+    }
+    for (const s of pts) { s.detour = true; s.branch = branchIdx; s.rejoin = rejoin; detours.push(s); }
+  }
+  { const b = idxAt(15.5, p => p.motif === 'whaleback');                      // D1: gentle branch off the whale's back
+    regDetour(b, [1, 2, 3].map(j => offPt(main[b + j], 4.6, 0.8 * j, 0.5, { r: j === 3 ? 2.0 : 1.9 })), 3.5); }
+  { const b = idxAt(52, p => p.kind === 'static');                            // D2: dash-only shortcut (branch sits above the 50m unlock)
+    const bp = main[b];
+    regDetour(b, [
+      offPt(bp, 1.5, 10.5 + (bp.r + 0.32) + (1.9 + 0.32), 0.3, { motif: 'detour-dash' }),
+      offPt(main[b + 2], 4.4, 0.8, 0.5),
+      offPt(main[b + 3], 4.4, 1.2, 0.6, { r: 2.0 })], 4.0); }
+  { const b = idxAt(111, p => p.kind === 'static');                           // D3: bounce branch
+    const pad = offPt(main[b + 2], 4.5, 0.6, 0.5, { kind: 'bounce', bounceV: 18 });
+    const o = radialAt(pad);
+    const ledge = { x: pad.x - o.x * 1.6, y: pad.y + 5.6, z: pad.z - o.z * 1.6, r: 2.0, kind: 'static', motif: 'detour' };
+    regDetour(b, [offPt(main[b + 1], 4.5, 0.6, 0.4), pad, ledge], 3.5); }
+  { const calm = main.findIndex((p, i) => p.y >= 138 && p.y <= 160 && p.kind === 'static' &&
+      [1, 2, 3].every(j => main[i + j] && main[i + j].y - main[i + j - 1].y <= 1.8));
+    const b = calm >= 0 ? calm : idxAt(163, p => p.kind === 'static');        // D4: crumble branch beside a calm stretch
+    regDetour(b, [1, 2, 3].map(j => offPt(main[b + j], 4.2, 0.7 * j, 0.5, { r: 1.8, kind: 'crumble', motif: 'detour' })), 3.5); }
+
+  /* ---------- memory shards x14 (detours / risky edges / beam midpoint) ---------- */
+  function shardOn(list, idx, off, side) {
+    const p = list[idx]; const tan = tangentAt(p, side);
+    shardSpecs.push({ x: p.x + tan.x * off, y: p.y + 1.35, z: p.z + tan.z * off, ref: list === detours ? 'd' : 'm', refIdx: idx });
+  }
+  shardOn(main, idxAt(9), 5.6, 1);
+  shardOn(detours, 2, 0, 1);                                                // D1 prize
+  shardOn(main, idxAt(36), 5.9, -1);
+  shardOn(main, main.findIndex(p => p.motif === 'ferry-in'), 3.0, 1);
+  shardOn(detours, 5, 0, 1);                                                // D2 prize
+  shardOn(main, idxAt(69), 5.4, 1);
+  { const cr = main.map((p, i) => i).filter(i => main[i].kind === 'crumble' && main[i].y > 108 && main[i].y < 126);
+    shardOn(main, cr[Math.floor(cr.length / 2)], 2.2, -1); }                // mid-gauntlet
+  shardOn(detours, 8, 0, 1);                                                // D3 prize
+  shardOn(main, idxAt(123), 6.1, -1);
+  shardOn(main, idxAt(142, p => p.motif === 'whaleback'), 3.2, 1);
+  shardOn(main, main.findIndex(p => p.motif === 'balance' && p.y > 150), 0, 1); // balance-beam midpoint
+  shardOn(detours, 11, 0, 1);                                               // D4 prize
+  shardOn(main, idxAt(195), 6.0, 1);
+  shardOn(main, idxAt(246, p => p.motif === 'whaleback'), 2.8, -1);
+
+  /* ---------- landmarks (decoration anchors; props.glb clones by name) ---------- */
+  function landmark(yT, propName, scale) {
+    let best = main[0], bd = 1e9;
+    for (const p of main) { const d = Math.abs(p.y - yT); if (d < bd) { bd = d; best = p; } }
+    const out = radialAt(best);
+    const dist = best.r + rr(4.2, 6.0);
+    landmarks.push({ height: Math.round(best.y), propName,
+      position: { x: best.x + out.x * dist, y: best.y, z: best.z + out.z * dist },
+      rotationY: Math.atan2(-out.x, -out.z), scale });
+  }
+  landmark(6, 'rock_spire', 1.2);
+  landmark(15, 'coral_tree', 1.3);
+  landmark(30, 'shell_spire', 1.5);
+  landmark(47, 'shell_arch', 1.7);
+  landmark(65, 'bone_rib', 1.8);
+  landmark(82, 'bone_wheel', 1.6);
+  landmark(100, 'rib_gate', 2.0);
+  landmark(117, 'crystal_cluster_big', 1.8);
+  landmark(135, 'crystal_gate', 2.0);
+  landmark(157, 'stone_pillar', 1.7);
+  landmark(180, 'ruin_gate', 2.0);
+  landmark(202, 'aurora_ribbon', 2.2);
+  landmark(225, 'halo_ring', 2.0);
+  landmark(243, 'moon_crescent', 1.8);
+  landmark(257, 'halo_ring', 1.6);
+  /* small props scattered on ~25% of roomy static platforms, at an edge offset */
+  const SMALL = ['coral_tree', 'shell_spire', 'rock_spire', 'crystal_cluster_big', 'stone_pillar', 'aurora_ribbon', 'moon_crescent'];
+  for (const p of main) {
+    if (p.kind !== 'static' || p.r < 1.95 || p.checkpoint || p.beam) continue;
+    if (rand() >= 0.25) continue;
+    const a = rand() * Math.PI * 2, d = p.r * 0.78;
+    landmarks.push({ height: Math.round(p.y), propName: SMALL[zoneOfY(p.y)], scatter: true,
+      position: { x: p.x + Math.cos(a) * d, y: p.y + 0.21, z: p.z + Math.sin(a) * d },
+      rotationY: rand() * Math.PI * 2, scale: rr(0.7, 1.1) });
+  }
+
+  return { main, detours, shardSpecs, landmarks, winds };
+})();
+/* ROUTE-BUILDER-END */
+const LANDMARKS = ROUTE_DATA.landmarks;
+window.__landmarks = LANDMARKS;
+const windColumns = ROUTE_DATA.winds;
+
+/* ---------- route instantiation ---------- */
+const checkpointPlats = [];
+let summitPlat = null;
+function specOpts(s) {
+  const o = { kind: s.kind, checkpoint: !!s.checkpoint };
+  if (s.beam) { o.beam = true; o.beamWid = s.beamWid; o.yaw = s.yaw; }
+  if (s.kind === 'move') { o.moveAmp = s.moveAmp; o.moveSpeed = s.moveSpeed; o.moveDir = new THREE.Vector3(s.moveDir.x, 0, s.moveDir.z); }
+  if (s.kind === 'rotate') o.rotSpeed = s.rotSpeed;
+  if (s.kind === 'bounce') o.bounceV = s.bounceV;
+  return o;
+}
+const mainPlats = [];
+for (const s of ROUTE_DATA.main) {
+  const p = addPlatform(new THREE.Vector3(s.x, s.y, s.z), s.r, specOpts(s));
+  p.motif = s.motif;
+  mainPlats.push(p);
+  if (s.checkpoint) checkpointPlats.push(p);
+  summitPlat = p;
+}
+const detourPlats = [];
+for (const s of ROUTE_DATA.detours) {
+  const p = addPlatform(new THREE.Vector3(s.x, s.y, s.z), s.r, specOpts(s));
+  p.motif = s.motif; p.isDetour = true;
+  detourPlats.push(p);
+}
+const mainPlatCount = mainPlats.length;
+/* guide support: main platforms carry their route-order index; detour
+   platforms borrow their branch index so they never hijack the beacon */
+platforms.forEach((p, i) => { p.pIdx = i; });
+ROUTE_DATA.detours.forEach((s, k) => { if (detourPlats[k]) detourPlats[k].pIdx = s.branch; });
+/* the first three platforms glow gold so the route reads from the start */
+for (const i of [0, 1, 2]) {
+  platforms[i].g.traverse(o => {
+    if (o.isMesh) {
+      o.material = o.material.clone();
+      if ('emissiveIntensity' in o.material) { o.material.emissive = new THREE.Color(0xffc766); o.material.emissiveIntensity = 0.5; }
+    }
+  });
 }
 
 /* start ground */
@@ -834,6 +1118,27 @@ const updrafts = [];
     const need = by === 0 ? 25 : by === 30 ? 55 : 85;
     updrafts.push({ mesh: m, glow, x: base.x, z: base.z, y0: by, y1: by + 34, lit: false, need });
   }
+}
+
+/* ---------- in-route wind shafts (glide updraft columns) ---------- */
+const windVisuals = [];
+for (const w of windColumns) {
+  const h = w.y1 - w.y0;
+  const cyl = new THREE.Mesh(new THREE.CylinderGeometry(w.r, w.r * 1.08, h, 18, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xbfeaff, transparent: true, opacity: 0.10,
+      side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+  cyl.position.set(w.x, w.y0 + h / 2, w.z); scene.add(cyl);
+  const N = 130, pos = new Float32Array(N * 3), spd = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const a = Math.random() * Math.PI * 2, rad = Math.sqrt(Math.random()) * w.r * 0.9;
+    pos.set([w.x + Math.cos(a) * rad, w.y0 + Math.random() * h, w.z + Math.sin(a) * rad], i * 3);
+    spd[i] = 6 + Math.random() * 5;
+  }
+  const pg = new THREE.BufferGeometry();
+  pg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const pts = new THREE.Points(pg, new THREE.PointsMaterial({ color: 0xd8f4ff, size: 0.3, map: softGlowTex, transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending }));
+  scene.add(pts);
+  windVisuals.push({ w, cyl, pts, spd });
 }
 
 /* ---------- next-platform guide: 道しるべ ---------- */
@@ -879,20 +1184,14 @@ const shards = [];
 {
   const sGeo = new THREE.OctahedronGeometry(0.55);
   const sMat = new THREE.MeshStandardMaterial({ color: 0xbdf3ff, emissive: 0x54c8ff, emissiveIntensity: 1.8, roughness: 0.15, transparent: true, opacity: 0.95 });
-  const picks = [8, 20, 33, 45, 58, 70, 82, 93, 105, 116, 127, 138, 148, 156];
   const glowT = softGlowTex;
-  /* audit fix: most shards used to hover at the platform edge (zero risk).
-     These seven are pushed out over the void — a committed jump off the
-     edge (run / dash makes it safe) — while staying collectable with the
-     abilities unlocked at their height */
-  const RISKY_SHARD_OFF = { 2: 5.6, 4: 5.9, 6: 5.4, 8: 6.1, 10: 5.7, 12: 6.0, 13: 5.5 };
-  picks.forEach((pi, i) => {
-    const p = platforms[Math.min(pi, platforms.length - 1)];
+  /* positions come from the route builder: four are prizes on the
+     optional detours, one floats at a balance beam's midpoint, one
+     beside a crumble gauntlet, the rest hover off platform edges over
+     the void — a committed jump out (and usually a fall) to collect */
+  ROUTE_DATA.shardSpecs.forEach((ss, i) => {
     const g = new THREE.Group();
-    const side = i % 2 === 0 ? 1 : -1;
-    const mag = RISKY_SHARD_OFF[i] ?? (2.6 + (i % 3) * 0.7);
-    const off = new THREE.Vector3(-Math.sin(pathAngle(p.base.y)), 0, Math.cos(pathAngle(p.base.y))).multiplyScalar(side * mag);
-    g.position.copy(p.base).add(off); g.position.y = p.base.y + 1.35;
+    g.position.set(ss.x, ss.y, ss.z);
     const core = new THREE.Mesh(sGeo, sMat); core.scale.set(0.7, 1.25, 0.7); g.add(core);
     const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowT, color: 0x8fe0ff, transparent: true, opacity: 0.8, depthWrite: false }));
     spr.scale.setScalar(3.4); g.add(spr);
@@ -1384,6 +1683,15 @@ function step(dt, t) {
       S.grounded = false; S.standing = null;
     }
   }
+  /* in-route wind shafts: hold Space (glide) inside the column to ride it up */
+  for (const w of windColumns) {
+    const dx = S.pos.x - w.x, dz = S.pos.z - w.z;
+    if (dx * dx + dz * dz < w.r * w.r && S.pos.y > w.y0 - 1 && S.pos.y < w.y1 &&
+        !S.grounded && keys.Space && S.unlocks.glide) {
+      S.vel.y = Math.min(S.vel.y + 55 * dt, 6.5);
+      S.gliding = true;
+    }
+  }
   /* integrate */
   S.pos.x += S.vel.x * dt;
   S.pos.z += S.vel.z * dt;
@@ -1415,7 +1723,13 @@ function step(dt, t) {
       if (S.standing.kind === 'crumble' && S.standing.crumbleState === 0) S.standing.crumbleState = 1;
       if (S.standing.pIdx !== undefined && S.standing.pIdx > S.reachedIdx) S.reachedIdx = S.standing.pIdx;
     }
-    if (S.buffer > 0) doJump(1);
+    if (S.standing && S.standing.kind === 'bounce') {
+      /* bounce cloud: landing IS the launch — spring skyward */
+      S.vel.y = S.standing.bounceV || 17.5;
+      S.grounded = false; S.standing = null;
+      juice.sqV += 6.5;
+      burst(S.pos, 0xffffff, 9);
+    } else if (S.buffer > 0) doJump(1);
   } else {
     if (wasGrounded) S.coyote = 0.12; else S.coyote -= dt;
     S.standing = null;
@@ -1515,6 +1829,22 @@ function loadWithTimeout(loader, url, ms = 9000) {
     const sc = pathPoint(GOAL_Y, 0); cc.position.x += sc.x; cc.position.z += sc.z; cc.position.y += GOAL_Y + 1.2;
     scene.add(cc);
   }).catch(() => { /* primitive crystals stay */ });
+  /* landmark props: cloned by mesh name from props.glb; pure decoration,
+     the game is complete without the file (graceful absence) */
+  loadWithTimeout(loader, './assets/props.glb', 12000).then(gltf => {
+    const byName = {};
+    gltf.scene.traverse(o => { if (o.name && !byName[o.name]) byName[o.name] = o; });
+    for (const lm of LANDMARKS) {
+      const src = byName[lm.propName];
+      if (!src) continue;
+      const c = src.clone(true);
+      c.traverse(o => { if (o.isMesh && o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity = 0.4; });
+      c.position.set(lm.position.x, lm.position.y, lm.position.z);
+      c.rotation.y = lm.rotationY;
+      c.scale.setScalar(lm.scale);
+      scene.add(c);
+    }
+  }).catch(() => { /* landmarks are decoration only */ });
 }
 
 /* soften environment reflections on everything built so far */
@@ -1586,7 +1916,7 @@ function animate() {
   /* guide beacon follows the next unreached platform (live position,
      so it tracks moving platforms too) */
   {
-    const tgt = platforms[Math.min(S.reachedIdx + 1, platforms.length - 1)];
+    const tgt = S.reachedIdx + 1 < mainPlatCount ? platforms[S.reachedIdx + 1] : summitPlat;
     guideGroup.visible = guide.on && !S.finished && !!tgt;
     if (guideGroup.visible) {
       guideGroup.position.set(tgt.g.position.x, topY(tgt), tgt.g.position.z);
@@ -1624,6 +1954,18 @@ function animate() {
   /* dust follows player */
   dust.position.set(S.pos.x, S.pos.y + 6, S.pos.z);
   dust.rotation.y = t * 0.014;
+  /* wind shafts: particles stream upward, recycle at the base */
+  for (const wv of windVisuals) {
+    const arr = wv.pts.geometry.attributes.position;
+    for (let i = 0; i < wv.spd.length; i++) {
+      let y = arr.array[i * 3 + 1] + wv.spd[i] * dt;
+      if (y > wv.w.y1) y = wv.w.y0;
+      arr.array[i * 3 + 1] = y;
+    }
+    arr.needsUpdate = true;
+    wv.cyl.material.opacity = 0.09 + Math.sin(t * 2.1 + wv.w.y0) * 0.03;
+    wv.cyl.rotation.y = t * 0.35;
+  }
   /* light-waterfalls: stream points downward, recycle at the top */
   for (const lf of lightFalls) {
     const arr = lf.p.geometry.attributes.position;
