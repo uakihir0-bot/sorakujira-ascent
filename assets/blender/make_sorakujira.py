@@ -1,10 +1,14 @@
-"""Sorakujira v5 - craft overhaul: procedural baked skin + carved head.
+"""Sorakujira v5.2 - craft overhaul: procedural baked skin + carved head.
+(v5.2: pleat/crease bump confined to a throat window in v - the
+un-windowed v5.1 crease converged at the head UV pole and read as a
+radial pleat fan on the dome; see the win_in/win_out nodes below.)
 
 What changed vs v4 (silhouette / proportions / countershading kept -
 they were sound; the SURFACE and DETAIL method is new):
 - SKIN: built as a layered procedural shader-node material (large
   mottling + mid blotches + fine grain on the albedo, longitudinal
-  throat/flank creases + micro-grain as bump, roughness layered by
+  throat-only creases (v-windowed, v5.2) + micro-grain as bump,
+  roughness layered by
   belly/back + mottle, plankton as Voronoi-cell bioluminescence
   clustered on dorsal/lateral lines - no painted canvas anywhere),
   then BAKED at 4096x2048 (base colour / roughness / normal / emission)
@@ -363,7 +367,9 @@ def build_skin_proc():
     wave_p = mathn(nt, 'POWER', -600, -1025, v1=1.6)
     lk(nt, wave, "Result", wave_p, 0)
     belly_band = nd(nt, "ShaderNodeMapRange", -1050, -1250)
-    for nm_, vv in (("From Min", 0.0), ("From Max", 0.34), ("To Min", 1.0), ("To Max", 0.0)):
+    # v5.2: tighter u band (0.34 -> 0.24) - the pleats hug the throat
+    # underside only and no longer wrap onto the flanks of the head
+    for nm_, vv in (("From Min", 0.0), ("From Max", 0.24), ("To Min", 1.0), ("To Max", 0.0)):
         belly_band.inputs[nm_].default_value = vv
     belly_band.clamp = True
     lk(nt, d_belly, "Value", belly_band, "Value")
@@ -373,21 +379,48 @@ def build_skin_proc():
     throat.clamp = True
     lk(nt, V, "Value", throat, "Value")
     # crease strength along v: whisper mid-body, real pleats only on
-    # the throat (v>0.8) - v5.1 fix for the "corduroy flank" read
+    # the throat (v>0.8) - v5.1 fix for the "corduroy flank" read.
+    # v5.2: the whole crease term is ADDITIONALLY confined by the
+    # throat window (win_in/win_out below).
     body_cr = nd(nt, "ShaderNodeMapRange", -850, -1520)
     for nm_, vv in (("From Min", 0.45), ("From Max", 0.80), ("To Min", 0.10), ("To Max", 0.35)):
         body_cr.inputs[nm_].default_value = vv
     body_cr.clamp = True
     lk(nt, V, "Value", body_cr, "Value")
-    throat_s2 = mathn(nt, 'MULTIPLY', -850, -1330, v1=0.65)
+    # v5.2: throat pleat strength -25% (0.65 -> 0.49) so the throat
+    # reads as soft skin folds, not engraved grooves
+    throat_s2 = mathn(nt, 'MULTIPLY', -850, -1330, v1=0.49)
     lk(nt, throat, "Result", throat_s2, 0)
     thr_s = mathn(nt, 'ADD', -700, -1400)
     lk(nt, body_cr, "Result", thr_s, 0); lk(nt, throat_s2, "Value", thr_s, 1)
+    # v5.2 THROAT WINDOW in v: the UV-longitudinal sine converges at
+    # the head pole and - at full strength right up to v=1 - read as a
+    # radial pleat fan across the melon/dome (visible in the v5.1 key
+    # visual from below-front). Real ventral pleats are longitudinal
+    # and live ONLY on the throat. Pleats now exist solely inside
+    # v 0.885..0.958 on the belly band: fade in 0.845->0.885, fade out
+    # 0.958->0.985, fully ZERO for v>0.985 and everywhere below 0.845 -
+    # which also keeps every directional/line pattern out of BOTH pole
+    # calm zones (head AND tail); only isotropic micro-grain remains.
+    win_in = nd(nt, "ShaderNodeMapRange", -700, -1560)
+    for nm_, vv in (("From Min", 0.845), ("From Max", 0.885), ("To Min", 0.0), ("To Max", 1.0)):
+        win_in.inputs[nm_].default_value = vv
+    win_in.clamp = True
+    lk(nt, V, "Value", win_in, "Value")
+    win_out = nd(nt, "ShaderNodeMapRange", -550, -1560)
+    for nm_, vv in (("From Min", 0.958), ("From Max", 0.985), ("To Min", 1.0), ("To Max", 0.0)):
+        win_out.inputs[nm_].default_value = vv
+    win_out.clamp = True
+    lk(nt, V, "Value", win_out, "Value")
+    win = mathn(nt, 'MULTIPLY', -400, -1560)
+    lk(nt, win_in, "Result", win, 0); lk(nt, win_out, "Result", win, 1)
     crease = mathn(nt, 'MULTIPLY', -450, -1150)
     lk(nt, wave_p, "Value", crease, 0)
     cb = mathn(nt, 'MULTIPLY', -450, -1300)
     lk(nt, belly_band, "Result", cb, 0); lk(nt, thr_s, "Value", cb, 1)
-    lk(nt, cb, "Value", crease, 1)
+    cbw = mathn(nt, 'MULTIPLY', -450, -1450)
+    lk(nt, cb, "Value", cbw, 0); lk(nt, win, "Value", cbw, 1)
+    lk(nt, cbw, "Value", crease, 1)
     crease_s = mathn(nt, 'MULTIPLY', -300, -1150, v1=0.85)
     lk(nt, crease, "Value", crease_s, 0)
     grain = noise(-1250, -1600, 7.0, 2.0)
