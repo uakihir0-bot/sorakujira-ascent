@@ -72,6 +72,12 @@
   .ovStory{margin-top:24px;max-width:640px;font-size:15px;line-height:2.25;color:#dbe8ff;text-shadow:0 1px 8px rgba(0,0,0,.8)}
   .ovControls{margin-top:22px;font-family:"Hiragino Sans","Noto Sans JP",sans-serif;font-size:12.5px;line-height:2.05;color:#aebfe4}
   .ovControls b{color:#ffe9b8;font-weight:400}
+  .ovOpts{margin-top:18px;display:flex;gap:26px;align-items:center;justify-content:center;flex-wrap:wrap;
+    font-family:"Hiragino Sans","Noto Sans JP",sans-serif;font-size:12.5px;color:#c9d9f6}
+  .ovOpts input[type="checkbox"]{accent-color:#e8c877;width:15px;height:15px;vertical-align:-2px;cursor:pointer}
+  .ovOpts select{font-family:inherit;font-size:12.5px;color:#eaf1ff;background:rgba(16,24,54,.85);
+    border:1px solid rgba(255,255,255,.28);border-radius:6px;padding:3px 8px;cursor:pointer}
+  .optChk,.optSel{pointer-events:auto;cursor:pointer}
   .bigBtn{margin-top:32px;pointer-events:auto;cursor:pointer;font-family:inherit;font-size:17px;letter-spacing:.34em;
     color:#101630;background:linear-gradient(180deg,#ffeec0,#e8c877);border:none;border-radius:999px;padding:15px 46px 15px 56px;
     box-shadow:0 6px 30px rgba(232,200,119,.4);transition:transform .25s, box-shadow .25s}
@@ -110,12 +116,12 @@
     <div class="slot" id="slot-double"><div class="sName">二段跳び</div><div class="sKey">空中でもう一度 Space ・ 25m</div></div>
     <div class="slot" id="slot-dash"><div class="sName">風ダッシュ</div><div class="sKey">空中で Shift ・ 50m</div></div>
     <div class="slot" id="slot-glide"><div class="sName">滑空</div><div class="sKey">落下中に Space 長押し ・ 75m</div></div>
-    <div class="slot" id="slot-updraft"><div class="sName">月帰りの大跳躍</div><div class="sKey">金の上昇気流 ／ T で帰還 ・ 100m</div></div>
+    <div class="slot" id="slot-updraft"><div class="sName">月帰りの大跳躍</div><div class="sKey">気流は25m〜順に点火 ／ T で帰還 ・ 100m</div></div>
     <div class="slot" id="slot-boots"><div class="sName">星屑ブーツ</div><div class="sKey">跳躍 +15% ・ 130m</div></div>
     <div class="slot" id="slot-ddash"><div class="sName">風の二重ダッシュ</div><div class="sKey">空中ダッシュ 2回 ・ 175m</div></div>
   </div>
   <div id="statBox">経過 <b id="statTime">0:00</b><br>落下 <b id="statFalls">0</b> 回</div>
-  <div id="helpBox">WASD 移動 ・ Space 跳ぶ ・ Shift 疾走／空中ダッシュ<br>マウスドラッグで視点 ・ ホイールで距離</div>
+  <div id="helpBox">WASD 移動 ・ Space 跳ぶ ・ Shift 疾走／空中ダッシュ<br>マウスドラッグで視点 ・ ホイールで距離 ・ C：視点リセット</div>
   <div id="toast"><div id="toastTitle"></div><div id="toastText"></div></div>
 </div>
 
@@ -130,8 +136,12 @@
   </div>
   <div class="ovControls">
     <b>WASD / 矢印</b> 移動　<b>Space</b> 跳ぶ　<b>Shift</b> 疾走（空中ではダッシュ）　<b>T</b> 最高到達点へ帰還<br>
-    <b>マウスドラッグ</b> 視点を回す　<b>ホイール</b> カメラ距離<br>
+    <b>マウスドラッグ</b> 視点を回す　<b>ホイール</b> カメラ距離　<b>C / ダブルクリック</b> 視点リセット<br>
     高く登るほど、新しい力が目覚める。落ちても、覚えた力は消えない。
+  </div>
+  <div class="ovOpts">
+    <label class="optChk"><input type="checkbox" id="guideChk" checked> 道しるべ（次の足場の光柱）</label>
+    <label class="optSel">描画 <select id="qualitySel"><option value="rich" selected>美麗</option><option value="light">軽量</option></select></label>
   </div>
   <button class="bigBtn" id="startBtn">登りはじめる</button>
 </div>
@@ -172,7 +182,7 @@ const pathPoint  = (y, out = 0) => {
 
 /* ---------- renderer / scene / camera ---------- */
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -198,12 +208,49 @@ let composer = null, bloomPass = null;
 try {
   const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: 4 });
   composer = new EffectComposer(renderer, rt);
-  composer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  composer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   composer.addPass(new RenderPass(scene, camera));
   bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.55, 0.6, 0.72);
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
 } catch (e) { composer = null; }
+
+/* ---------- performance: quality state + adaptive governor ----------
+   Steps are applied one at a time (cheapest first) when the rolling
+   4-second average FPS stays under 38 after 10s of play. The same
+   helpers back the start overlay's 軽量 (light) quality choice. */
+const Q = { bloom: true, shadows: true, spritesReduced: false, spritesFrozen: false };
+let govT = 0, govFrames = 0;
+function setPixelRatio(pr) {
+  renderer.setPixelRatio(pr); renderer.setSize(innerWidth, innerHeight);
+  if (composer) { composer.setPixelRatio(pr); composer.setSize(innerWidth, innerHeight); }
+}
+function stepReduceSprites() {
+  let changed = false;
+  if (!Q.spritesReduced) {
+    Q.spritesReduced = true;
+    spriteClouds.forEach((sc, i) => { if (i % 2) sc.sp.visible = false; });
+    changed = true;
+  }
+  if (!Q.spritesFrozen) { Q.spritesFrozen = true; changed = true; }
+  return changed;
+}
+function stepShadowsOff() {
+  if (!Q.shadows) return false;
+  Q.shadows = false; sun.castShadow = false; renderer.shadowMap.enabled = false;
+  scene.traverse(o => { if (o.isMesh && o.material) o.material.needsUpdate = true; });
+  return true;
+}
+function stepBloomOff() { if (!Q.bloom) return false; Q.bloom = false; return true; }
+function applyLightQuality() {   /* start overlay: 軽量 */
+  setPixelRatio(1);
+  Q.bloom = false;
+  stepShadowsOff();
+  if (!Q.spritesReduced) {
+    Q.spritesReduced = true;
+    spriteClouds.forEach((sc, i) => { if (i % 2) sc.sp.visible = false; });
+  }
+}
 
 /* ---------- lights ---------- */
 const sun = new THREE.DirectionalLight(0xffd9a8, 2.6);
@@ -687,7 +734,7 @@ const checkpointPlats = [];
     if (isCp) { r = 3.0; }
     else if (idx % 13 === 6 && zone >= 1) { kind = 'rotate'; opts.rotSpeed = 0.35 + rand() * 0.3; }
     else if (idx % 11 === 5 && zone >= 1) { kind = 'crumble'; }
-    else if (idx % 9 === 4) { kind = 'move'; opts.moveAmp = 1.5 + rand() * 1.1; opts.moveSpeed = 0.55 + rand() * 0.4; }
+    else if (idx % 9 === 4) { kind = 'move'; opts.moveAmp = 1.5 + rand() * 1.1; opts.moveSpeed = 0.8 + rand() * 0.35; }
     else if (idx % 8 === 7 && zone >= 3) { opts.beam = true; r = 2.5; }
     opts.kind = kind;
     const p = addPlatform(pos, r, opts);
@@ -696,6 +743,54 @@ const checkpointPlats = [];
   }
 }
 var summitPlat = platforms[platforms.length - 1];
+
+/* ---------- playability audit fixes (post-generation pass) ----------
+   Applied AFTER the generation loop so the LCG rand() sequence — and
+   therefore every platform's rolled parameters — is completely untouched. */
+{
+  const byIdx = i => platforms[i];
+  /* P0: the first rise was 2.41m vs a 2.36m jump apex (the hardest vertical
+     in the game, held up only by the landing window). Lower idx0 to y=1.8
+     so the first rise is 2.01m and the step out of it is a normal 2.02m. */
+  const p0 = byIdx(0);
+  p0.base.y = 1.8; p0.g.position.y = 1.8; p0.prev.y = 1.8;
+  /* P0: the two summit platforms must be static (idx159 rolled 'crumble'). */
+  for (const i of [158, 159]) { const p = byIdx(i); p.kind = 'static'; p.crumbleState = 0; }
+  /* P1 ability gates: platforms pushed radially outward (+4.2m) so the gap
+     can only be crossed with the air dash (unlocked at 50m; all three gates
+     sit far above that, with glide and boots also available). */
+  const radialOut = (p, d) => {
+    const a = pathAngle(p.base.y);
+    p.base.x += Math.cos(a) * d; p.base.z += Math.sin(a) * d;
+    p.g.position.copy(p.base); p.prev.copy(p.base);
+  };
+  radialOut(byIdx(96), 4.2);    /* 157.7m — between a beam and a rotor */
+  radialOut(byIdx(124), 4.2);   /* 203.1m */
+  radialOut(byIdx(152), 4.2);   /* 248.4m */
+  /* P1 double-jump gate: idx72 (星屑の結晶) raised one extra step, so the
+     rise into it is 3.24m — beyond a single jump (2.64m landable), well
+     inside a double jump (4.45m). Double jump unlocks at 25m; this is 119m. */
+  const p72 = byIdx(72);
+  p72.base.y += STEP; p72.g.position.y += STEP; p72.prev.y += STEP;
+  /* P1: give the thinnest zone (星屑の結晶) its missing crumble platforms.
+     Materials are cloned exactly as addPlatform() does for natural crumbles,
+     so the fade touches only these two platforms. */
+  for (const i of [66, 77]) {
+    const p = byIdx(i); p.kind = 'crumble';
+    p.g.traverse(o => { if (o.isMesh) { o.material = o.material.clone(); } });
+  }
+  /* guide support: remember each platform's index, and make the first
+     three platforms glow gold so the route reads from the very start */
+  platforms.forEach((p, i) => { p.pIdx = i; });
+  for (const i of [0, 1, 2]) {
+    byIdx(i).g.traverse(o => {
+      if (o.isMesh) {
+        o.material = o.material.clone();
+        if ('emissiveIntensity' in o.material) { o.material.emissive = new THREE.Color(0xffc766); o.material.emissiveIntensity = 0.5; }
+      }
+    });
+  }
+}
 
 /* start ground */
 const startPos = pathPoint(0, 0.5); startPos.y = 0;
@@ -727,8 +822,28 @@ const updrafts = [];
     scene.add(m);
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0xffd977, transparent: true, opacity: 0.6, depthWrite: false }));
     glow.position.set(base.x, by + 1.2, base.z); glow.scale.setScalar(7); glow.visible = false; scene.add(glow);
-    updrafts.push({ mesh: m, glow, x: base.x, z: base.z, y0: by, y1: by + 34 });
+    /* per-pillar ignition: each pillar wakes once the player has climbed
+       high enough to have nearly reached the next one, so the express
+       return grows with you instead of arriving all at once at 100m */
+    const need = by === 0 ? 25 : by === 30 ? 55 : 85;
+    updrafts.push({ mesh: m, glow, x: base.x, z: base.z, y0: by, y1: by + 34, lit: false, need });
   }
+}
+
+/* ---------- next-platform guide: 道しるべ ---------- */
+const guide = { on: true };
+const guideGroup = new THREE.Group(); scene.add(guideGroup);
+{
+  const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.9, 15, 14, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xaee9ff, transparent: true, opacity: 0.12,
+      side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+  pillar.position.y = 7.5; pillar.name = 'guidePillar'; guideGroup.add(pillar);
+  const mark = new THREE.Mesh(new THREE.ConeGeometry(0.42, 1.05, 4),
+    new THREE.MeshBasicMaterial({ color: 0xffd977, transparent: true, opacity: 0.95 }));
+  mark.rotation.x = Math.PI;   /* apex down: a small floating chevron */
+  mark.name = 'guideMark'; guideGroup.add(mark);
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softGlowTex, color: 0xaee9ff, transparent: true, opacity: 0.5, depthWrite: false }));
+  glow.scale.setScalar(4.5); glow.position.y = 1.1; guideGroup.add(glow);
 }
 
 /* ---------- memory shards: 鯨の記憶 x14 ---------- */
@@ -754,11 +869,17 @@ const shards = [];
   const sMat = new THREE.MeshStandardMaterial({ color: 0xbdf3ff, emissive: 0x54c8ff, emissiveIntensity: 1.8, roughness: 0.15, transparent: true, opacity: 0.95 });
   const picks = [8, 20, 33, 45, 58, 70, 82, 93, 105, 116, 127, 138, 148, 156];
   const glowT = softGlowTex;
+  /* audit fix: most shards used to hover at the platform edge (zero risk).
+     These seven are pushed out over the void — a committed jump off the
+     edge (run / dash makes it safe) — while staying collectable with the
+     abilities unlocked at their height */
+  const RISKY_SHARD_OFF = { 2: 5.6, 4: 5.9, 6: 5.4, 8: 6.1, 10: 5.7, 12: 6.0, 13: 5.5 };
   picks.forEach((pi, i) => {
     const p = platforms[Math.min(pi, platforms.length - 1)];
     const g = new THREE.Group();
     const side = i % 2 === 0 ? 1 : -1;
-    const off = new THREE.Vector3(-Math.sin(pathAngle(p.base.y)), 0, Math.cos(pathAngle(p.base.y))).multiplyScalar(side * (2.6 + (i % 3) * 0.7));
+    const mag = RISKY_SHARD_OFF[i] ?? (2.6 + (i % 3) * 0.7);
+    const off = new THREE.Vector3(-Math.sin(pathAngle(p.base.y)), 0, Math.cos(pathAngle(p.base.y))).multiplyScalar(side * mag);
     g.position.copy(p.base).add(off); g.position.y = p.base.y + 1.35;
     const core = new THREE.Mesh(sGeo, sMat); core.scale.set(0.7, 1.25, 0.7); g.add(core);
     const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowT, color: 0x8fe0ff, transparent: true, opacity: 0.8, depthWrite: false }));
@@ -977,8 +1098,8 @@ const S = {
   pos: startSpawn.clone(), vel: new THREE.Vector3(),
   facing: Math.PI, grounded: false, standing: null,
   coyote: 0, buffer: 0, airJumps: 0,
-  dashCharges: 1, dashCd: 0, dashT: 0, dashDir: new THREE.Vector3(),
-  gliding: false, falls: 0, maxHeight: 0,
+  dashCharges: 1, dashCd: 0, dashT: 0, dashDir: new THREE.Vector3(), dashArmed: false,
+  gliding: false, falls: 0, maxHeight: 0, reachedIdx: -1,
   highestCp: null, memories: 0,
   unlocks: { double: false, dash: false, glide: false, updraft: false, boots: false, ddash: false }
 };
@@ -996,6 +1117,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Space') onJumpPress();
   if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') onDashPress();
   if (e.code === 'KeyT') teleportToCheckpoint();
+  if (e.code === 'KeyC') startCamReset();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 function onJumpPress() {
@@ -1010,6 +1132,7 @@ function doJump(mult) {
 }
 function onDashPress() {
   if (!S.unlocks.dash || S.grounded || S.dashCd > 0 || S.dashCharges <= 0) return;
+  S.dashArmed = false;
   const dir = moveDir();
   if (dir.lengthSq() < 0.01) dir.set(-Math.sin(S.facing), 0, -Math.cos(S.facing)).negate();
   S.dashDir.copy(dir.normalize());
@@ -1027,12 +1150,27 @@ function teleportToCheckpoint() {
 }
 /* pointer camera */
 let dragging = false, lastX = 0, lastY = 0;
+let lastCamInputT = -10, moveHoldT = 0;   /* for the gentle auto-align assist */
+let camTween = null;                     /* camera reset (C / double-click) */
+function startCamReset() {
+  if (!S.started || S.finished) return;
+  let dy = (S.facing + Math.PI) - camYaw;   /* settle behind the character */
+  while (dy > Math.PI) dy -= Math.PI * 2;
+  while (dy < -Math.PI) dy += Math.PI * 2;
+  camTween = { t: 0, dur: 0.9, fromYaw: camYaw, toYaw: camYaw + dy,
+    fromPitch: camPitch, toPitch: 0.34, fromDist: camDist, toDist: 10.5 };
+  moveHoldT = 0;
+}
 const cvs = renderer.domElement;
-cvs.addEventListener('pointerdown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; cvs.setPointerCapture(e.pointerId); });
+cvs.addEventListener('pointerdown', e => { dragging = true; camTween = null; lastX = e.clientX; lastY = e.clientY; cvs.setPointerCapture(e.pointerId); });
+cvs.addEventListener('dblclick', () => startCamReset());
 cvs.addEventListener('pointermove', e => {
   if (!dragging) return;
   camYaw -= (e.clientX - lastX) * 0.0052;
-  camPitch = THREE.MathUtils.clamp(camPitch + (e.clientY - lastY) * 0.004, -0.12, 1.05);
+  /* sane pitch range in this orbit's sign convention (+ = camera above,
+     looking down): at most 1.15 rad down-look, 0.42 rad up-look, so the
+     view can never flip under the world and lose the character */
+  camPitch = THREE.MathUtils.clamp(camPitch + (e.clientY - lastY) * 0.004, -0.42, 1.15);
   lastX = e.clientX; lastY = e.clientY;
 });
 addEventListener('pointerup', () => dragging = false);
@@ -1116,9 +1254,9 @@ function toast(title, text, ms = 4200) {
 }
 const UNLOCK_DEFS = [
   { key: 'double',  y: 25,  slot: 'slot-double',  title: '解放 ― 二段跳び', text: 'しずくの背に小さな鰭が生えた。空は、もう一度だけ踏むことができる。' },
-  { key: 'dash',    y: 50,  slot: 'slot-dash',    title: '解放 ― 風ダッシュ', text: 'リボンの鰭が光を帯びた。空中で Shift を押すと、風を蹴って駆ける。' },
+  { key: 'dash',    y: 50,  slot: 'slot-dash',    title: '解放 ― 風ダッシュ', text: 'リボンの鰭が光を帯びた。空中で Shift を押すか、走りながら押し続けて跳ぶと、風を蹴って駆ける。' },
   { key: 'glide',   y: 75,  slot: 'slot-glide',   title: '解放 ― 滑空', text: '鰭は翼になった。落下中に Space を押しつづけると、雲の上を滑っていける。' },
-  { key: 'updraft', y: 100, slot: 'slot-updraft', title: '解放 ― 月帰りの大跳躍', text: '金の上昇気流が目覚めた。落ちても、そこから楽に登り返せる。T で最高の刻へ帰還もできる。' },
+  { key: 'updraft', y: 100, slot: 'slot-updraft', title: '解放 ― 月帰りの大跳躍', text: '頭上に光輪が灯った。T で最高のチェックポイントへ帰還できる。金の上昇気流は登った高さに応じて目覚め、帰り道を支えてくれる。' },
   { key: 'boots',   y: 130, slot: 'slot-boots',   title: '解放 ― 星屑ブーツ', text: '足もとに星屑が宿った。跳躍の力が永久に 15% 高まる。' },
   { key: 'ddash',   y: 175, slot: 'slot-ddash',   title: '解放 ― 風の二重ダッシュ', text: '鰭の光が紫に変わった。空中でダッシュが二度使えるようになった。' }
 ];
@@ -1128,8 +1266,18 @@ function checkUnlocks() {
       S.unlocks[u.key] = true;
       el(u.slot).classList.add('on');
       toast(u.title, u.text, 5200);
-      if (u.key === 'updraft') updrafts.forEach(u2 => { u2.mesh.visible = true; u2.glow.visible = true; });
       if (u.key === 'updraft') haloRing.visible = true;
+    }
+  }
+}
+/* golden pillars ignite one by one as maxHeight grows (25m / 55m / 85m),
+   so a fall at 30–90m is no longer a full re-climb */
+function checkUpdraftIgnition() {
+  for (const u of updrafts) {
+    if (!u.lit && S.maxHeight >= u.need) {
+      u.lit = true; u.mesh.visible = true; u.glow.visible = true;
+      /* delayed so it never clobbers a same-height unlock toast (25m) */
+      setTimeout(() => toast('金の上昇気流が目覚めた', '鯨の息が帰り道を作る。気流の柱に乗れば、ここまで一気に登り返せる。', 3800), 1600);
     }
   }
 }
@@ -1213,14 +1361,13 @@ function step(dt, t) {
     }
     if (S.vel.y < -34) S.vel.y = -34;
   }
-  /* golden updrafts */
-  if (S.unlocks.updraft) {
-    for (const u of updrafts) {
-      const dx = S.pos.x - u.x, dz = S.pos.z - u.z;
-      if (dx * dx + dz * dz < 5.2 && S.pos.y > u.y0 - 1 && S.pos.y < u.y1) {
-        S.vel.y = Math.min(S.vel.y + 95 * dt, 26);
-        S.grounded = false; S.standing = null;
-      }
+  /* golden updrafts (each pillar works once it has ignited) */
+  for (const u of updrafts) {
+    if (!u.lit) continue;
+    const dx = S.pos.x - u.x, dz = S.pos.z - u.z;
+    if (dx * dx + dz * dz < 5.2 && S.pos.y > u.y0 - 1 && S.pos.y < u.y1) {
+      S.vel.y = Math.min(S.vel.y + 95 * dt, 26);
+      S.grounded = false; S.standing = null;
     }
   }
   /* integrate */
@@ -1246,14 +1393,22 @@ function step(dt, t) {
     if (!wasGrounded && fallV < -4.5) onLandJuice(-fallV);
     S.coyote = 0.12; S.airJumps = 0;
     S.dashCharges = S.unlocks.ddash ? 2 : 1;
+    /* running with Shift held arms an air dash, so a run → jump → dash
+       flow works without re-pressing Shift in mid-air */
+    if (keys.ShiftLeft || keys.ShiftRight) S.dashArmed = true;
     if (S.standing) {
       if (S.standing.checkpoint && (!S.highestCp || topY(S.standing) > topY(S.highestCp))) S.highestCp = S.standing;
       if (S.standing.kind === 'crumble' && S.standing.crumbleState === 0) S.standing.crumbleState = 1;
+      if (S.standing.pIdx !== undefined && S.standing.pIdx > S.reachedIdx) S.reachedIdx = S.standing.pIdx;
     }
     if (S.buffer > 0) doJump(1);
   } else {
     if (wasGrounded) S.coyote = 0.12; else S.coyote -= dt;
     S.standing = null;
+    /* armed dash: Shift still held past the apex fires the dash once,
+       extending the jump instead of swallowing the input */
+    if (S.dashArmed && (keys.ShiftLeft || keys.ShiftRight) && S.vel.y < 0.5) onDashPress();
+    if (!keys.ShiftLeft && !keys.ShiftRight) S.dashArmed = false;
   }
   S.buffer = Math.max(0, S.buffer - dt);
   S.dashCd = Math.max(0, S.dashCd - dt);
@@ -1270,6 +1425,7 @@ function step(dt, t) {
   /* height / unlocks / goal */
   S.maxHeight = Math.max(S.maxHeight, S.pos.y);
   checkUnlocks();
+  checkUpdraftIgnition();
   if (!S.finished && S.pos.y >= GOAL_Y - 1.2 && S.grounded) finishGame();
   /* shards */
   for (const sh of shards) {
@@ -1359,6 +1515,18 @@ function animate() {
   if (S.started && !S.finished) { S.time += dt; step(dt, t); }
   else if (S.started && S.finished) { /* gentle idle after goal */ }
   updatePlatforms(t, dt);
+  /* adaptive quality governor: one step down per bad 4s window */
+  if (S.started && !S.finished && S.time > 10) {
+    govFrames++; govT += dt;
+    if (govT >= 4) {
+      const fps = govFrames / govT; govFrames = 0; govT = 0;
+      if (fps < 38) {
+        for (const st of [stepReduceSprites, stepShadowsOff, stepBloomOff]) {
+          if (st()) { toast('描画を軽量化しました', 'フレームレートを保つため、描画負荷を自動で下げました。', 2600); break; }
+        }
+      }
+    }
+  }
   /* player visual */
   playerGroup.position.copy(S.pos);
   const visual = glbVisual || primVisual;
@@ -1398,14 +1566,27 @@ function animate() {
     sh.g.rotation.y += dt * 1.1;
   }
   crownCrystals.rotation.y += dt * 0.16;
-  /* updraft shimmer */
-  if (S.unlocks.updraft) for (const u of updrafts) u.mesh.material.opacity = 0.13 + Math.sin(t * 2.6 + u.y0) * 0.05;
+  /* guide beacon follows the next unreached platform (live position,
+     so it tracks moving platforms too) */
+  {
+    const tgt = platforms[Math.min(S.reachedIdx + 1, platforms.length - 1)];
+    guideGroup.visible = guide.on && !S.finished && !!tgt;
+    if (guideGroup.visible) {
+      guideGroup.position.set(tgt.g.position.x, topY(tgt), tgt.g.position.z);
+      const pl = guideGroup.getObjectByName('guidePillar');
+      if (pl) pl.material.opacity = 0.10 + Math.sin(t * 2.2) * 0.04;
+      const mk = guideGroup.getObjectByName('guideMark');
+      if (mk) { mk.position.y = 3.1 + Math.sin(t * 2.2) * 0.35; mk.rotation.y = t * 1.4; }
+    }
+  }
+  /* updraft shimmer (lit pillars only) */
+  for (const u of updrafts) if (u.lit) u.mesh.material.opacity = 0.13 + Math.sin(t * 2.6 + u.y0) * 0.05;
   /* clouds drift */
   for (const c of clouds) {
     c.m.position.x += Math.sin(t * 0.05 + c.ph) * 0.006 + c.sp * dt;
     if (c.m.position.x > 190) c.m.position.x = -190;
   }
-  for (const sc of spriteClouds) {
+  if (!Q.spritesFrozen) for (const sc of spriteClouds) {
     sc.sp.position.x += sc.drift * dt;
     sc.sp.position.y = sc.baseY + Math.sin(t * 0.24 + sc.ph) * 0.7;
     if (sc.sp.position.x > 320) sc.sp.position.x = -320;
@@ -1496,6 +1677,33 @@ function animate() {
   sun.position.set(S.pos.x + curSunOff.x, S.pos.y + curSunOff.y, S.pos.z + curSunOff.z);
   sun.target.position.copy(S.pos);
   /* camera */
+  if (dragging) lastCamInputT = t;
+  /* camera reset tween (C / double-click): glide behind the character */
+  if (camTween) {
+    camTween.t += dt;
+    const k0 = Math.min(1, camTween.t / camTween.dur), k = k0 * k0 * (3 - 2 * k0);
+    camYaw = THREE.MathUtils.lerp(camTween.fromYaw, camTween.toYaw, k);
+    camPitch = THREE.MathUtils.lerp(camTween.fromPitch, camTween.toPitch, k);
+    camDist = THREE.MathUtils.lerp(camTween.fromDist, camTween.toDist, k);
+    lastCamInputT = t;
+    if (k0 >= 1) camTween = null;
+  }
+  /* gentle auto-align: after >1.2s of continuous movement with no mouse
+     input, ease the yaw toward behind-the-player at <=0.5 rad/s so the
+     9.5-revolution spiral does not demand constant manual orbiting.
+     Any drag instantly overrides (and resets the hold timer). */
+  {
+    const md = moveDir();
+    if (S.started && !dragging && !camTween && t - lastCamInputT > 0.4 && md.lengthSq() > 0.01 && hSpeed > 2) moveHoldT += dt;
+    else moveHoldT = 0;
+    if (moveHoldT > 1.2) {
+      const desired = Math.atan2(-S.vel.x, -S.vel.z);
+      let dy = desired - camYaw;
+      while (dy > Math.PI) dy -= Math.PI * 2;
+      while (dy < -Math.PI) dy += Math.PI * 2;
+      camYaw += THREE.MathUtils.clamp(dy, -0.5 * dt, 0.5 * dt);
+    }
+  }
   camTarget.lerp(new THREE.Vector3(S.pos.x, S.pos.y + 1.7, S.pos.z), 1);
   const cx = S.pos.x + Math.sin(camYaw) * Math.cos(camPitch) * camDist;
   const cz = S.pos.z + Math.cos(camYaw) * Math.cos(camPitch) * camDist;
@@ -1513,6 +1721,20 @@ function animate() {
     camera.position.x += (Math.random() - 0.5) * 2 * a;
     camera.position.y += (Math.random() - 0.5) * 2 * a;
   }
+  /* keep the camera out of the whale's body: push it to at least 2.2m
+     outside the helix tube (radius 3.1, centreline at pathRadius-7.2).
+     The GLB whale rides the same helix footprint, so this holds for both. */
+  {
+    const hy = THREE.MathUtils.clamp(camera.position.y + 2, 0, GOAL_Y + 12);
+    const ha = pathAngle(hy), hr = pathRadius(hy) - 7.2;
+    const wx = Math.cos(ha) * hr, wz = Math.sin(ha) * hr, wy = hy - 2;
+    const dx = camera.position.x - wx, dy2 = camera.position.y - wy, dz = camera.position.z - wz;
+    const minD = 3.1 + 2.2, d2 = dx * dx + dy2 * dy2 + dz * dz;
+    if (d2 < minD * minD && d2 > 1e-6) {
+      const s = minD / Math.sqrt(d2);
+      camera.position.set(wx + dx * s, wy + dy2 * s, wz + dz * s);
+    }
+  }
   camera.lookAt(S.pos.x, S.pos.y + 1.7, S.pos.z);
   /* HUD */
   if (S.started) {
@@ -1525,7 +1747,7 @@ function animate() {
     el('statTime').textContent = mm + ':' + String(ss).padStart(2, '0');
     el('statFalls').textContent = S.falls;
   }
-  if (composer) composer.render(); else renderer.render(scene, camera);
+  if (composer && Q.bloom) composer.render(); else renderer.render(scene, camera);
 }
 /* menu camera intro framing */
 camera.position.set(startSpawn.x + 10, 7, startSpawn.z + 12);
@@ -1536,6 +1758,8 @@ animate();
 el('startBtn').addEventListener('click', () => {
   el('startOverlay').classList.add('hidden');
   el('hud').classList.add('on');
+  guide.on = el('guideChk').checked;
+  if (el('qualitySel').value === 'light') applyLightQuality();
   S.started = true;
   toast('旅の始まり', '鯨の尾から登りはじめよう。WASDで走り、Spaceで跳ぶ。', 4600);
 });
